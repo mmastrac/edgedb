@@ -1188,13 +1188,19 @@ mod tests {
 
     #[test(tokio::test(flavor = "current_thread", start_paused = true))]
     async fn run_spec_tests() -> Result<()> {
-        spec_tests(None).await?;
+        spec_tests(None, &|_| true).await?;
         Ok(())
     }
 
-    async fn spec_tests(scale: Option<f64>) -> Result<SuiteQoS> {
+    async fn spec_tests(
+        scale: Option<f64>,
+        spec_predicate: &impl Fn(&'static str) -> bool,
+    ) -> Result<SuiteQoS> {
         let mut results = SuiteQoS::default();
-        for spec in SPEC_FUNCTIONS {
+        for (name, spec) in SPEC_FUNCTIONS {
+            if !spec_predicate(name) {
+                continue;
+            }
             let mut spec = spec();
             if let Some(scale) = scale {
                 spec.scale(scale);
@@ -1216,18 +1222,46 @@ mod tests {
 
     /// Runs the specs `count` times, returning the median run.
     #[allow(unused)]
-    fn run_specs_tests_in_runtime(count: usize, scale: Option<f64>) -> Result<SuiteQoS> {
-        let mut runs = vec![];
+    fn run_specs_tests_in_runtime(
+        count: usize,
+        scale: Option<f64>,
+        spec_predicate: &impl Fn(&'static str) -> bool,
+    ) -> Result<SuiteQoS> {
+        let mut handles = vec![];
         for _ in 0..count {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .unwrap();
-            let _guard = runtime.enter();
-            tokio::time::pause();
-            let qos = runtime.block_on(spec_tests(scale))?;
-            runs.push(qos);
+            let mut results = SuiteQoS::default();
+            let mut suite_handles = vec![];
+            for (name, spec) in SPEC_FUNCTIONS {
+                if !spec_predicate(name) {
+                    continue;
+                }
+                let spec = spec();
+                let h = std::thread::spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .unwrap();
+                    let _guard = runtime.enter();
+                    tokio::time::pause();
+                    let qos = runtime.block_on(run(spec))?;
+                    Ok((name, qos))
+                });
+                suite_handles.push(h);
+            }
+            handles.push(suite_handles);
         }
+        let mut runs = vec![];
+        for suite_handles in handles {
+            let mut suite = SuiteQoS::default();
+            for handle in suite_handles {
+                let (name, qos) = handle
+                    .join()
+                    .map_err(|e| anyhow::anyhow!("Thread failed"))??;
+                suite.insert(name.into(), qos);
+            }
+            runs.push(suite)
+        }
+
         runs.sort_by_cached_key(|run| (run.qos_rms_error() * 1_000_000.0) as usize);
         let ret = runs.drain(count / 2..).next().unwrap();
         Ok(ret)
@@ -1237,21 +1271,33 @@ mod tests {
     #[cfg(feature = "optimizer")]
     fn optimizer() {
         use crate::knobs::*;
-        use std::sync::atomic::AtomicIsize;
-
         use genetic_algorithm::strategy::evolve::prelude::*;
         use lru::LruCache;
-        use rand::Rng;
+        use rand::{seq::IteratorRandom, thread_rng, Rng};
+        use std::{collections::BTreeSet, sync::Arc};
 
         // the search goal to optimize towards (maximize or minimize)
-        #[derive(Clone, std::fmt::Debug, smart_default::SmartDefault)]
+        #[derive(Clone, derive_more::Debug)]
         pub struct Optimizer {
-            #[default(std::sync::Arc::new(AtomicIsize::new(isize::MIN)))]
-            best: std::sync::Arc<AtomicIsize>,
-            #[default(LruCache::new(100_000_000.try_into().unwrap()))]
+            best: isize,
             lru: LruCache<[usize; ALL_KNOB_COUNT], isize>,
-            #[default(std::time::Instant::now())]
+            #[allow(unused)]
             now: std::time::Instant,
+            #[debug(skip)]
+            spec_predicate: Arc<dyn Fn(&'static str) -> bool + Send + Sync + 'static>,
+        }
+
+        impl Optimizer {
+            pub fn new(
+                spec_predicate: impl Fn(&'static str) -> bool + Send + Sync + 'static,
+            ) -> Self {
+                Self {
+                    best: isize::MIN,
+                    lru: LruCache::new(1_000_000.try_into().unwrap()),
+                    now: std::time::Instant::now(),
+                    spec_predicate: Arc::new(spec_predicate),
+                }
+            }
         }
 
         impl Fitness for Optimizer {
@@ -1274,27 +1320,32 @@ mod tests {
                     };
                 }
 
-                let real = rand::thread_rng().gen_range(0..1000) < 200;
+                // let weights = [(1.0, 5, None)];
+                // let real = true;
+                let real = true; //rand::thread_rng().gen_range(0..1000) < 200;
                 let weights = if real {
-                    [(1.0, 5, None), (0.5, 1, Some(10.0))]
+                    [(0.5, 5, None), (1.0, 3, Some(10.0))]
                 } else {
-                    [(1.0, 5, None), (0.5, 1, None)]
+                    [(0.5, 5, None), (1.0, 1, None)]
                 };
-                let outputs =
-                    weights.map(|(_, count, scale)| run_specs_tests_in_runtime(count, scale));
+                let weight_sum = 1.5;
+                let outputs = weights.map(|(_, count, scale)| {
+                    run_specs_tests_in_runtime(count, scale, &|spec| (self.spec_predicate)(spec))
+                });
                 let mut score = 0.0;
                 for ((weight, ..), output) in weights.iter().zip(&outputs) {
                     score += weight * output.as_ref().ok()?.qos_rms_error();
                 }
+                score /= weight_sum;
                 let qos_i = (score * 1_000_000.0) as isize;
-                if real && qos_i > self.best.load(std::sync::atomic::Ordering::SeqCst) {
+                if real && qos_i > self.best {
                     eprintln!("{:?} New best: {score:.02} {knobs:?}", self.now.elapsed());
                     eprintln!("{:?}", crate::knobs::ALL_KNOBS);
                     for (weight, output) in weights.iter().zip(outputs) {
                         eprintln!("{weight:?}: {:?}", output.ok()?);
                     }
                     eprintln!("*****************************");
-                    self.best.store(qos_i, std::sync::atomic::Ordering::SeqCst);
+                    self.best = qos_i;
                 }
                 self.lru.push(knobs, qos_i);
 
@@ -1302,72 +1353,102 @@ mod tests {
             }
         }
 
-        let mut seeds: Vec<Vec<isize>> = vec![];
+        let mut candidates = vec![];
+        let default_knobs = crate::knobs::ALL_KNOBS
+            .iter()
+            .map(|k| k.get() as _)
+            .collect_vec();
+        for count in [33, 66, 100] {
+            eprintln!("Starting {}%", (100 * count) / 100);
+            for set in (1..=SPEC_FUNCTIONS.len())
+                .combinations((SPEC_FUNCTIONS.len() * count) / 100)
+                .choose_multiple(&mut thread_rng(), 10)
+            {
+                let set: BTreeSet<_> = set.iter().map(|n| format!("test_connpool_{n}")).collect();
+                eprintln!("Spec combination: {set:?}");
+                let mut seeds: Vec<Vec<isize>> = candidates.clone();
 
-        // The current state
-        seeds.push(
-            crate::knobs::ALL_KNOBS
-                .iter()
-                .map(|k| k.get() as _)
-                .collect(),
-        );
+                // The current state
+                seeds.push(default_knobs.clone());
 
-        // A constant value for all knobs
-        for i in 0..100 {
-            seeds.push([i].repeat(crate::knobs::ALL_KNOBS.len()));
-        }
+                // // A constant value for all knobs
+                // for i in 0..100 {
+                //     seeds.push([i].repeat(crate::knobs::ALL_KNOBS.len()));
+                // }
 
-        // Some randomness
-        for _ in 0..100 {
-            seeds.push(
-                (0..crate::knobs::ALL_KNOBS.len())
-                    .map(|_| rand::thread_rng().gen_range(0..1000))
-                    .collect(),
-            );
-        }
+                // // Some randomness
+                // for _ in 0..20 {
+                //     seeds.push(
+                //         (0..crate::knobs::ALL_KNOBS.len())
+                //             .map(|_| rand::thread_rng().gen_range(0..1000))
+                //             .collect(),
+                //     );
+                // }
 
-        let mut f32_seeds = vec![];
-        for mut seed in seeds {
-            for (i, knob) in crate::knobs::ALL_KNOBS.iter().enumerate() {
-                let mut value = seed[i] as _;
-                if knob.set(value).is_err() {
-                    knob.clamp(&mut value);
-                    seed[i] = value as _;
-                };
+                let mut f32_seeds = vec![];
+                for mut seed in seeds {
+                    for (i, knob) in crate::knobs::ALL_KNOBS.iter().enumerate() {
+                        let mut value = seed[i] as _;
+                        if knob.set(value).is_err() {
+                            knob.clamp(&mut value);
+                            seed[i] = value as _;
+                        };
+                    }
+                    f32_seeds.push(seed.into_iter().map(|n| n as _).collect());
+                }
+
+                let genotype = ContinuousGenotype::builder()
+                    .with_genes_size(crate::knobs::ALL_KNOBS.len())
+                    .with_allele_range(0.0..1000.0)
+                    .with_allele_neighbour_ranges(vec![-50.0..50.0, -5.0..5.0])
+                    .with_seed_genes_list(f32_seeds)
+                    .build()
+                    .unwrap();
+
+                let mut rng = rand::thread_rng(); // a randomness provider implementing Trait rand::Rng
+                let mut evolve = Evolve::builder()
+                    .with_multithreading(true)
+                    .with_genotype(genotype)
+                    .with_target_population_size(250)
+                    .with_target_fitness_score(100 * 1_000_000)
+                    .with_max_stale_generations(25)
+                    .with_fitness(Optimizer::new(move |spec| set.contains(spec)))
+                    .with_crossover(CrossoverUniform::new(true))
+                    .with_mutate(MutateOnce::new(0.5))
+                    .with_compete(CompeteTournament::new(100))
+                    .with_extension(ExtensionMassInvasion::new(0.6, 0.6))
+                    .build()
+                    .unwrap();
+
+                for i in 1..=10 {
+                    evolve.call(&mut rng);
+
+                    let best = evolve
+                        .best_chromosome()
+                        .unwrap()
+                        .genes
+                        .into_iter()
+                        .map(|f| f as isize)
+                        .collect_vec();
+                    let fitness = (evolve.best_fitness_score().unwrap() as f64) / 1_000_000.0;
+                    eprintln!(" - #{i} Best: {fitness:.02} {best:?}");
+                    if i == 10 {
+                        candidates.push(best);
+                    }
+                }
+
+                if count == 4 {
+                    println!("{}", evolve);
+                }
             }
-            f32_seeds.push(seed.into_iter().map(|n| n as _).collect());
         }
-
-        let genotype = ContinuousGenotype::builder()
-            .with_genes_size(crate::knobs::ALL_KNOBS.len())
-            .with_allele_range(0.0..1000.0)
-            .with_allele_neighbour_ranges(vec![-50.0..50.0, -5.0..5.0])
-            .with_seed_genes_list(f32_seeds)
-            .build()
-            .unwrap();
-
-        let mut rng = rand::thread_rng(); // a randomness provider implementing Trait rand::Rng
-        let evolve = Evolve::builder()
-            .with_multithreading(true)
-            .with_genotype(genotype)
-            .with_target_population_size(1000)
-            .with_target_fitness_score(100 * 1_000_000)
-            .with_max_stale_generations(1000)
-            .with_fitness(Optimizer::default())
-            .with_crossover(CrossoverUniform::new(true))
-            .with_mutate(MutateOnce::new(0.5))
-            .with_compete(CompeteTournament::new(200))
-            .with_extension(ExtensionMassInvasion::new(0.6, 0.6))
-            .call(&mut rng)
-            .unwrap();
-        println!("{}", evolve);
     }
 
     macro_rules! run_spec {
         ($($spec:ident),* $(,)?) => {
-            const SPEC_FUNCTIONS: [fn() -> Spec; [$( $spec ),*].len()] = [
+            const SPEC_FUNCTIONS: [(&'static str, fn() -> Spec); [$( $spec ),*].len()] = [
                 $(
-                    $spec,
+                    (stringify!($spec), $spec),
                 )*
             ];
 

@@ -127,6 +127,8 @@ macro_rules! constants {
     };
 }
 
+// [5, 2, 2, 1, 495, 277, 168, 1, 160, 520, 584, 0, 26, 1360, 531, 100, 346, 308, 1300, 6620]
+
 // Note: these constants are tuned via the generic algorithm optimizer.
 constants! {
     /// The maximum number of connections to create or destroy during a rebalance.
