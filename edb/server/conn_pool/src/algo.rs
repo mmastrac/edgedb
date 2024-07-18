@@ -183,7 +183,8 @@ constants! {
     const OVERFULL_IDLE_WEIGHT: usize = 100;
     /// This is divided by the youngest connection metric to penalize switching from
     /// a backend which has changed recently.
-    const OVERFULL_CHANGE_WEIGHT_DIVIDEND: usize = 4690;
+    const OVERFULL_CHANGE_WEIGHT_DIVIDEND: usize = 200;
+    const OVERFULL_CHANGE_WEIGHT_IDLE_DIVIDEND: usize = 4690;
     /// The weight we apply to waiters when determining overfullness.
     const OVERFULL_WAITER_WEIGHT: usize = 4460;
     const OVERFULL_WAITER_ACTIVE_WEIGHT: usize = 1300;
@@ -263,6 +264,7 @@ pub trait PoolAlgorithmDataMetrics {
     fn total_max(&self) -> usize;
     fn max(&self, variant: MetricVariant) -> usize;
     fn avg_ms(&self, variant: MetricVariant) -> usize;
+    fn most_recent_ms(&self, variant: MetricVariant) -> Option<usize>;
 }
 
 pub trait PoolAlgorithmDataBlock: PoolAlgorithmDataMetrics {
@@ -342,6 +344,10 @@ pub trait PoolAlgorithmDataBlock: PoolAlgorithmDataMetrics {
             .max(self.avg_ms(MetricVariant::Connecting) + self.avg_ms(MetricVariant::Disconnecting))
             .max(MIN_TIME.get());
         let youngest_ms = self.youngest_ms().max(MIN_TIME.get());
+        let youngest_idle_ms = self
+            .most_recent_ms(MetricVariant::Idle)
+            .unwrap_or_default()
+            .max(MIN_TIME.get());
 
         // If we have no idle connections, or we don't have enough connections we're not overfull.
         if target >= current || idle == 0 {
@@ -354,6 +360,8 @@ pub trait PoolAlgorithmDataBlock: PoolAlgorithmDataMetrics {
             // "negative" penalty to blocks that have newly acquired a connection.
             let youngest_score =
                 ((OVERFULL_CHANGE_WEIGHT_DIVIDEND.get() * reconnecting_ms) / youngest_ms) as isize;
+            let youngest_idle_score = ((OVERFULL_CHANGE_WEIGHT_IDLE_DIVIDEND.get() * reconnecting_ms)
+                / youngest_idle_ms) as isize;
             // The number of waiters and the amount of time we expect to spend
             // active on these waiters also acts as a "negative" penalty.
             let waiter_score = (waiters * OVERFULL_WAITER_WEIGHT.get()
@@ -361,7 +369,7 @@ pub trait PoolAlgorithmDataBlock: PoolAlgorithmDataMetrics {
                 + (OVERFULL_ACTIVE_WEIGHT_DIVIDEND.get() / active_ms))
                 as isize;
 
-            let base_score = idle_score - youngest_score - waiter_score;
+            let base_score = idle_score - youngest_score - youngest_idle_score - waiter_score;
             if current > target {
                 let diff = current - target;
                 let diff_score = (diff * OVERFULL_DIFF_WEIGHT.get()) as isize;

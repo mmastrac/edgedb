@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, time::Duration};
 use strum::EnumCount;
 use strum::IntoEnumIterator;
@@ -154,6 +155,7 @@ pub struct ConnMetrics {
     pub(crate) value: VariantArray<usize>,
     pub(crate) max: VariantArray<usize>,
     pub(crate) avg_time: VariantArray<u32>,
+    pub(crate) most_recent: VariantArray<Option<Instant>>,
     pub(crate) total: usize,
     pub(crate) total_max: usize,
 }
@@ -186,6 +188,8 @@ struct RawMetrics {
     max: VariantArray<usize>,
     /// The time spent in each state.
     times: VariantArray<RollingAverageU32<32>>,
+    /// The most recent transition to this state.
+    most_recent: VariantArray<Option<Instant>>,
 }
 
 impl RawMetrics {
@@ -198,6 +202,7 @@ impl RawMetrics {
     #[inline(always)]
     fn inc_all_time(&mut self, to: MetricVariant) {
         self.all_time[to] += 1;
+        self.most_recent[to] = Some(Instant::now());
     }
 
     #[inline(always)]
@@ -244,6 +249,10 @@ impl PoolAlgorithmDataMetrics for MetricsAccum {
     #[inline(always)]
     fn avg_ms(&self, variant: MetricVariant) -> usize {
         self.raw.borrow().times[variant].avg() as _
+    }
+    #[inline(always)]
+    fn most_recent_ms(&self, variant: MetricVariant) -> Option<usize> {
+        self.raw.borrow().most_recent[variant].map(|i| i.elapsed().as_millis() as _)
     }
     #[inline(always)]
     fn count(&self, variant: MetricVariant) -> usize {
@@ -300,6 +309,7 @@ impl MetricsAccum {
             avg_time,
             total: lock.total,
             total_max: lock.total_max,
+            most_recent: lock.most_recent,
         }
     }
 

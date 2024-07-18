@@ -411,6 +411,10 @@ impl<C: Connector> PoolAlgorithmDataMetrics for Block<C, PoolAlgoTargetData> {
     fn total_max(&self) -> usize {
         self.state.metrics.total_max()
     }
+    #[inline(always)]
+    fn most_recent_ms(&self, variant: MetricVariant) -> Option<usize> {
+        self.state.metrics.most_recent_ms(variant)
+    }
 }
 
 impl<C: Connector> PoolAlgorithmDataBlock for Block<C, PoolAlgoTargetData> {
@@ -461,6 +465,10 @@ impl<C: Connector> PoolAlgorithmDataMetrics for Blocks<C, PoolAlgoTargetData> {
     #[inline(always)]
     fn total_max(&self) -> usize {
         self.metrics.total_max()
+    }
+    #[inline(always)]
+    fn most_recent_ms(&self, variant: MetricVariant) -> Option<usize> {
+        self.metrics.most_recent_ms(variant)
     }
 }
 
