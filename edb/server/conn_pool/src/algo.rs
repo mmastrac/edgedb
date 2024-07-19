@@ -155,7 +155,7 @@ constants! {
     /// when we are competing at lower levels of demand, allowing for more
     /// reproducable results.
     #[range(1..=256)]
-    const DEMAND_MINIMUM: usize = 168;
+    const DEMAND_MINIMUM: usize = 16;
 
     /// The maximum-minimum connection count we'll allocate to connections if there
     /// is more capacity than backends.
@@ -369,7 +369,7 @@ pub trait PoolAlgorithmDataBlock: PoolAlgorithmDataMetrics {
                 + (OVERFULL_ACTIVE_WEIGHT_DIVIDEND.get() / active_ms))
                 as isize;
 
-            let base_score = idle_score - youngest_score - youngest_idle_score - waiter_score;
+            let base_score = idle_score - youngest_score + youngest_idle_score - waiter_score;
             if current > target {
                 let diff = current - target;
                 let diff_score = (diff * OVERFULL_DIFF_WEIGHT.get()) as isize;

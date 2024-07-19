@@ -10,7 +10,7 @@ use crate::{
 };
 use futures::future::Either;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     future::{poll_fn, ready, Future},
     rc::Rc,
@@ -379,6 +379,7 @@ impl<C: Connector, D: Default> Block<C, D> {
 pub struct Blocks<C: Connector, D: Default = ()> {
     map: RefCell<HashMap<Name, Rc<Block<C, D>>>>,
     metrics: Rc<MetricsAccum>,
+    reconnect_count: Cell<usize>,
 }
 
 impl<C: Connector, D: Default> Default for Blocks<C, D> {
@@ -386,6 +387,7 @@ impl<C: Connector, D: Default> Default for Blocks<C, D> {
         Self {
             map: RefCell::new(HashMap::default()),
             metrics: Rc::new(MetricsAccum::default()),
+            reconnect_count: Cell::default(),
         }
     }
 }
@@ -577,6 +579,7 @@ impl<C: Connector, D: Default> Blocks<C, D> {
         let mut metrics = PoolMetrics::default();
         metrics.pool = self.metrics.summary();
         metrics.all_time = self.metrics.all_time();
+        metrics.reconnect_count = self.reconnect_count.get();
         for (name, block) in self.map.borrow().iter() {
             metrics
                 .blocks
@@ -652,6 +655,7 @@ impl<C: Connector, D: Default> Blocks<C, D> {
     ) -> impl Future<Output = ConnResult<()>> {
         let from_block = self.block(from);
         let to_block = self.block(db);
+        self.reconnect_count.set(self.reconnect_count.get() + 1);
         Block::task_reconnect(from_block, to_block, connector)
     }
 
@@ -665,6 +669,7 @@ impl<C: Connector, D: Default> Blocks<C, D> {
     ) -> impl Future<Output = ConnResult<()>> {
         let from_block = self.block(&conn.state.db_name);
         let to_block = self.block(db);
+        self.reconnect_count.set(self.reconnect_count.get() + 1);
         Block::task_reconnect_conn(from_block, to_block, conn, connector)
     }
 

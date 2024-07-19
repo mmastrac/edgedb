@@ -79,6 +79,7 @@ impl<const SIZE: usize> RollingAverageU32<SIZE> {
 pub struct PoolMetrics {
     pub pool: ConnMetrics,
     pub all_time: VariantArray<usize>,
+    pub reconnect_count: usize,
     pub blocks: BTreeMap<Name, ConnMetrics>,
 }
 

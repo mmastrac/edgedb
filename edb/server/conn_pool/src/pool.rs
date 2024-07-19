@@ -613,13 +613,12 @@ mod tests {
             real_time.elapsed()
         );
 
+        let metrics = pool.metrics();
         monitor.abort();
         _ = monitor.await;
-        let metrics = pool.metrics();
         info!("{metrics:#?}");
         info!("{latencies:#?}");
 
-        let metrics = pool.metrics();
         let mut qos = 0.0;
         let mut scores = vec![];
         for score in spec.score {
@@ -1061,7 +1060,7 @@ mod tests {
     }
 
     fn test_connpool_9() -> Spec {
-        let full_qps = 20000;
+        let full_qps = 2000;
 
         Spec {
             name: "test_connpool_9".into(),
@@ -1271,7 +1270,10 @@ mod tests {
     #[cfg(feature = "optimizer")]
     fn optimizer() {
         use crate::knobs::*;
-        use genetic_algorithm::strategy::evolve::prelude::*;
+        use genetic_algorithm::strategy::{
+            evolve::prelude::*,
+            hill_climb::{HillClimb, HillClimbVariant, Scaling},
+        };
         use lru::LruCache;
         use rand::{seq::IteratorRandom, thread_rng, Rng};
         use std::{collections::BTreeSet, sync::Arc};
@@ -1322,29 +1324,35 @@ mod tests {
 
                 // let weights = [(1.0, 5, None)];
                 // let real = true;
-                let real = true; //rand::thread_rng().gen_range(0..1000) < 200;
-                let weights = if real {
-                    [(0.5, 5, None), (1.0, 3, Some(10.0))]
-                } else {
-                    [(0.5, 5, None), (1.0, 1, None)]
-                };
-                let weight_sum = 1.5;
+                // let real = true; //rand::thread_rng().gen_range(0..1000) < 200;
+                // let weights = if real {
+                //     [(0.5, 5, None), (1.0, 3, Some(10.0))]
+                // } else {
+                //     [(0.5, 5, None), (1.0, 1, None)]
+                // };
+                // let weight_sum = 1.5;
+                let weights = [(1.0, 5, None)];
+                let weight_sum = 1.0;
+                let real = true;
                 let outputs = weights.map(|(_, count, scale)| {
                     run_specs_tests_in_runtime(count, scale, &|spec| (self.spec_predicate)(spec))
                 });
                 let mut score = 0.0;
                 for ((weight, ..), output) in weights.iter().zip(&outputs) {
-                    score += weight * output.as_ref().ok()?.qos_rms_error();
+                    score += weight * output.as_ref().ok()?.qos_min();
                 }
                 score /= weight_sum;
                 let qos_i = (score * 1_000_000.0) as isize;
                 if real && qos_i > self.best {
-                    eprintln!("{:?} New best: {score:.02} {knobs:?}", self.now.elapsed());
-                    eprintln!("{:?}", crate::knobs::ALL_KNOBS);
+                    eprintln!(
+                        "[SNAPSHOT] {:?} New best: {score:.02} {knobs:?}",
+                        self.now.elapsed()
+                    );
+                    eprintln!("[SNAPSHOT] {:?}", crate::knobs::ALL_KNOBS);
                     for (weight, output) in weights.iter().zip(outputs) {
-                        eprintln!("{weight:?}: {:?}", output.ok()?);
+                        eprintln!("[SNAPSHOT] {weight:?}: {:?}", output.ok()?);
                     }
-                    eprintln!("*****************************");
+                    eprintln!("[SNAPSHOT] *****************************");
                     self.best = qos_i;
                 }
                 self.lru.push(knobs, qos_i);
@@ -1358,7 +1366,7 @@ mod tests {
             .iter()
             .map(|k| k.get() as _)
             .collect_vec();
-        for count in [33, 66, 100] {
+        for count in [33, 75, 100] {
             eprintln!("Starting {}%", (100 * count) / 100);
             for set in (1..=SPEC_FUNCTIONS.len())
                 .combinations((SPEC_FUNCTIONS.len() * count) / 100)
@@ -1366,6 +1374,7 @@ mod tests {
             {
                 let set: BTreeSet<_> = set.iter().map(|n| format!("test_connpool_{n}")).collect();
                 eprintln!("Spec combination: {set:?}");
+                let predicate = move |spec| set.contains(spec);
                 let mut seeds: Vec<Vec<isize>> = candidates.clone();
 
                 // The current state
@@ -1400,27 +1409,37 @@ mod tests {
                 let genotype = ContinuousGenotype::builder()
                     .with_genes_size(crate::knobs::ALL_KNOBS.len())
                     .with_allele_range(0.0..1000.0)
+                    .with_allele_neighbour_range(-50.0..50.0)
                     .with_allele_neighbour_ranges(vec![-50.0..50.0, -5.0..5.0])
                     .with_seed_genes_list(f32_seeds)
                     .build()
                     .unwrap();
 
                 let mut rng = rand::thread_rng(); // a randomness provider implementing Trait rand::Rng
+                                                  // let mut evolve = HillClimb::builder()
+                                                  //     .with_multithreading(true)
+                                                  //     .with_genotype(genotype)
+                                                  //     .with_target_fitness_score(100 * 1_000_000)
+                                                  //     .with_fitness_ordering(FitnessOrdering::Maximize)
+                                                  //     .with_scaling(Scaling::new(1.0, 0.8, 1e-5))
+                                                  //     .with_fitness(Optimizer::new(move |spec| set.contains(spec)))
+                                                  //     .build()
+                                                  //     .unwrap();
                 let mut evolve = Evolve::builder()
                     .with_multithreading(true)
                     .with_genotype(genotype)
                     .with_target_population_size(250)
                     .with_target_fitness_score(100 * 1_000_000)
-                    .with_max_stale_generations(25)
-                    .with_fitness(Optimizer::new(move |spec| set.contains(spec)))
+                    .with_max_stale_generations(1000)
+                    .with_fitness(Optimizer::new(predicate))
                     .with_crossover(CrossoverUniform::new(true))
                     .with_mutate(MutateOnce::new(0.5))
-                    .with_compete(CompeteTournament::new(100))
+                    .with_compete(CompeteElite::new())
                     .with_extension(ExtensionMassInvasion::new(0.6, 0.6))
                     .build()
                     .unwrap();
 
-                for i in 1..=10 {
+                for i in 1..=1 {
                     evolve.call(&mut rng);
 
                     let best = evolve
