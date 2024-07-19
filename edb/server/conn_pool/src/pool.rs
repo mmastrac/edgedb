@@ -1331,7 +1331,7 @@ mod tests {
                 //     [(0.5, 5, None), (1.0, 1, None)]
                 // };
                 // let weight_sum = 1.5;
-                let weights = [(1.0, 5, None)];
+                let weights = [(1.0, 1, None)];
                 let weight_sum = 1.0;
                 let real = true;
                 let outputs = weights.map(|(_, count, scale)| {

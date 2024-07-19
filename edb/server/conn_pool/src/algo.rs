@@ -127,8 +127,6 @@ macro_rules! constants {
     };
 }
 
-// [5, 2, 2, 1, 495, 277, 168, 1, 160, 520, 584, 0, 26, 1360, 531, 100, 346, 308, 1300, 6620]
-
 // Note: these constants are tuned via the generic algorithm optimizer.
 constants! {
     /// The maximum number of connections to create or destroy during a rebalance.
@@ -150,7 +148,7 @@ constants! {
     /// The weight we apply to waiting connections.
     const DEMAND_WEIGHT_WAITING: usize = 3;
     /// The weight we apply to active connections.
-    const DEMAND_WEIGHT_ACTIVE: usize = 277;
+    const DEMAND_WEIGHT_ACTIVE: usize = 701;
     /// The minimum non-zero demand. This makes the demand calculations less noisy
     /// when we are competing at lower levels of demand, allowing for more
     /// reproducable results.
@@ -186,9 +184,9 @@ constants! {
     const OVERFULL_CHANGE_WEIGHT_DIVIDEND: usize = 200;
     const OVERFULL_CHANGE_WEIGHT_IDLE_DIVIDEND: usize = 4690;
     /// The weight we apply to waiters when determining overfullness.
-    const OVERFULL_WAITER_WEIGHT: usize = 4460;
+    const OVERFULL_WAITER_WEIGHT: usize = 262;
     const OVERFULL_WAITER_ACTIVE_WEIGHT: usize = 1300;
-    const OVERFULL_ACTIVE_WEIGHT_DIVIDEND: usize = 6620;
+    const OVERFULL_ACTIVE_WEIGHT_DIVIDEND: usize = 251;
 }
 
 /// Determines the rebalance plan based on the current pool state.
