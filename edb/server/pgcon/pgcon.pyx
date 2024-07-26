@@ -43,6 +43,7 @@ cimport cython
 cimport cpython
 
 from . cimport cpythonx
+# from .pgtransport cimport PGTransport
 
 from libc.stdint cimport int8_t, uint8_t, int16_t, uint16_t, \
                          int32_t, uint32_t, int64_t, uint64_t, \
@@ -725,10 +726,7 @@ cdef class PGConnection:
             self.write(_SYNC_MESSAGE)
 
             while True:
-                if not self.buffer.take_message():
-                    await self.wait_for_message()
-                mtype = self.buffer.get_message_type()
-
+                mtype = await self.wait_for_message_type()
                 if mtype == b'Z':
                     self.parse_sync_message()
                     return
@@ -741,9 +739,7 @@ cdef class PGConnection:
         error = None
         try:
             while True:
-                if not self.buffer.take_message():
-                    await self.wait_for_message()
-                mtype = self.buffer.get_message_type()
+                mtype = await self.wait_for_message_type()
                 if mtype == b'Z':
                     return self.parse_sync_message()
                 elif mtype == b'E':
@@ -891,9 +887,7 @@ cdef class PGConnection:
             int num_completed = 0
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'2' or mtype == b'D':
                 # BindComplete or Data
@@ -1077,9 +1071,7 @@ cdef class PGConnection:
 
         result = None
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             try:
                 if mtype == b'D':
@@ -1344,9 +1336,7 @@ cdef class PGConnection:
 
             buf = None
             while True:
-                if not self.buffer.take_message():
-                    await self.wait_for_message()
-                mtype = self.buffer.get_message_type()
+                mtype = await self.wait_for_message_type()
 
                 try:
                     if mtype == b'D':
@@ -1564,9 +1554,7 @@ cdef class PGConnection:
         result = None
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             try:
                 if mtype == b'D':
@@ -2411,9 +2399,7 @@ cdef class PGConnection:
         out = None
         i = 0
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'H':
                 # CopyOutResponse
@@ -2513,9 +2499,7 @@ cdef class PGConnection:
 
         er = None
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'G':
                 # CopyInResponse
@@ -2570,9 +2554,7 @@ cdef class PGConnection:
         self.write(qbuf)
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'C':
                 # CommandComplete
@@ -2831,9 +2813,7 @@ cdef class PGConnection:
         self.waiting_for_sync += 1
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             try:
                 if mtype == b'R':
@@ -3185,9 +3165,7 @@ cdef class PGConnection:
         self.write(msg)
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'E':
                 # ErrorResponse
@@ -3216,9 +3194,7 @@ cdef class PGConnection:
         self.write(msg)
 
         while True:
-            if not self.buffer.take_message():
-                await self.wait_for_message()
-            mtype = self.buffer.get_message_type()
+            mtype = await self.wait_for_message_type()
 
             if mtype == b'E':
                 # ErrorResponse
@@ -3249,8 +3225,23 @@ cdef class PGConnection:
             return
         if self.transport is None:
             raise ConnectionAbortedError()
+        if self.msg_waiter != None:
+            raise Exception('ack!')
         self.msg_waiter = self.loop.create_future()
         await self.msg_waiter
+
+    async def wait_for_message_type(self):
+        try:
+            print('+')
+            if not self.buffer.take_message():
+                print('waiting')
+                await self.wait_for_message()
+                print('got')
+            mtype = self.buffer.get_message_type()
+            print('-', chr(mtype))
+            return bytes([mtype])
+        except:
+            logger.exception("dead")
 
     def connection_made(self, transport):
         if self.transport is not None:

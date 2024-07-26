@@ -1,0 +1,4 @@
+*.py    diff=python
+*.pxd   diff=python
+*.pxi   diff=python
+*.pyx   diff=python

@@ -1090,6 +1090,14 @@ setuptools.setup(
         ),
 
         setuptools_extension.Extension(
+            "edb.server.pgcon.pgtransport",
+            ["edb/server/pgcon/pgtransport.pyx"],
+            extra_compile_args=EXT_CFLAGS,
+            extra_link_args=EXT_LDFLAGS,
+            include_dirs=EXT_INC_DIRS,
+        ),
+
+        setuptools_extension.Extension(
             "edb.graphql.extension",
             ["edb/graphql/extension.pyx"],
             extra_compile_args=EXT_CFLAGS,
