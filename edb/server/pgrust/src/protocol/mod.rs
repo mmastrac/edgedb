@@ -8,6 +8,7 @@
 mod arrays;
 mod datatypes;
 mod definition;
+mod message_group;
 mod gen;
 mod writer;
 
@@ -15,15 +16,15 @@ mod writer;
 pub mod meta {
     pub use super::arrays::meta::*;
     pub use super::datatypes::meta::*;
-    pub use super::definition::gen::meta::*;
+    pub use super::definition::meta::*;
 }
 
 pub mod measure {
-    pub use super::definition::gen::measure::*;
+    pub use super::definition::measure::*;
 }
 
 pub mod builder {
-    pub use super::definition::gen::builder::*;
+    pub use super::definition::builder::*;
 }
 
 pub mod messages {
@@ -35,7 +36,7 @@ pub use arrays::{Array, ArrayIter, ZTArray, ZTArrayIter};
 #[allow(unused)]
 pub use datatypes::{Encoded, Rest, ZTString};
 #[allow(unused)]
-pub use definition::gen::data::*;
+pub use definition::data::*;
 
 pub trait Enliven<'a> {
     type WithLifetime;
@@ -62,8 +63,8 @@ pub(crate) struct FieldAccess<T: for<'a> Enliven<'a>> {
 /// Delegate to the concrete `FieldAccess` for each type we want to extract.
 macro_rules! field_access {
     ($ty:ty) => {
-        impl<'a> $crate::protocol::FieldAccessNonConst<'a, <$ty as Enliven<'a>>::WithLifetime>
-            for <$ty as Enliven<'a>>::WithLifetime
+        impl<'a> $crate::protocol::FieldAccessNonConst<'a, <$ty as $crate::protocol::Enliven<'a>>::WithLifetime>
+            for <$ty as $crate::protocol::Enliven<'a>>::WithLifetime
         {
             #[inline(always)]
             fn size_of_field_at(buf: &[u8]) -> usize {
@@ -95,7 +96,7 @@ pub(crate) use match_message;
 
 #[cfg(test)]
 mod tests {
-    use definition::r#gen::builder;
+    use definition::builder;
 
     use super::*;
 

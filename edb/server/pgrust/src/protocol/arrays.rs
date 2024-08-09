@@ -174,11 +174,11 @@ macro_rules! array_access {
     ($ty:ty | $($len:ty)*) => {
         $(
         #[allow(unused)]
-        impl FieldAccess<$crate::protocol::meta::Array<$len, $ty>> {
+        impl $crate::protocol::FieldAccess<$crate::protocol::meta::Array<$len, $ty>> {
             #[inline]
             pub const fn size_of_field_at(mut buf: &[u8]) -> usize {
                 let mut size = std::mem::size_of::<$len>();
-                let mut len = FieldAccess::<$len>::extract(buf);
+                let mut len = $crate::protocol::FieldAccess::<$len>::extract(buf);
                 buf = buf.split_at(size).1;
                 loop {
                     if len == 0 {
@@ -193,27 +193,27 @@ macro_rules! array_access {
             }
             #[inline(always)]
             pub const fn extract(buf: &[u8]) -> $crate::protocol::Array<'_, $len, <$ty as $crate::protocol::Enliven::<'_>>::WithLifetime> {
-                let len = FieldAccess::<$len>::extract(buf);
+                let len = $crate::protocol::FieldAccess::<$len>::extract(buf);
                 $crate::protocol::Array::new(buf.split_at(std::mem::size_of::<$len>()).1, len as u32)
             }
             #[inline]
-            pub const fn measure<'a>(buffer: &'a[<$ty as Enliven<'a>>::ForMeasure]) -> usize {
+            pub const fn measure<'a>(buffer: &'a[<$ty as $crate::protocol::Enliven<'a>>::ForMeasure]) -> usize {
                 let mut size = std::mem::size_of::<$len>();
                 let mut index = 0;
                 loop {
                     if index + 1 > buffer.len() {
                         break;
                     }
-                    size += FieldAccess::<$ty>::measure(&buffer[index]);
+                    size += $crate::protocol::FieldAccess::<$ty>::measure(&buffer[index]);
                     index += 1;
                 }
                 size
             }
             #[inline(always)]
-            pub fn copy_to_buf<'a>(buf: &mut $crate::protocol::writer::BufWriter, value: &'a[<$ty as Enliven<'a>>::ForBuilder]) {
+            pub fn copy_to_buf<'a>(buf: &mut $crate::protocol::writer::BufWriter, value: &'a[<$ty as $crate::protocol::Enliven<'a>>::ForBuilder]) {
                 buf.write(&<$len>::to_be_bytes(value.len() as _));
                 for elem in value {
-                    FieldAccess::<$ty>::copy_to_buf(buf, elem);
+                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf(buf, elem);
                 }
             }
 
@@ -221,7 +221,7 @@ macro_rules! array_access {
         )*
 
         #[allow(unused)]
-        impl FieldAccess<$crate::protocol::meta::ZTArray<$ty>> {
+        impl $crate::protocol::FieldAccess<$crate::protocol::meta::ZTArray<$ty>> {
             #[inline]
             pub const fn size_of_field_at(mut buf: &[u8]) -> usize {
                 let mut size = 1;
@@ -229,32 +229,32 @@ macro_rules! array_access {
                     if buf[0] == 0 {
                         return size;
                     }
-                    let elem_size = FieldAccess::<$ty>::size_of_field_at(buf);
+                    let elem_size = $crate::protocol::FieldAccess::<$ty>::size_of_field_at(buf);
                     buf = buf.split_at(elem_size).1;
                     size += elem_size;
                 }
             }
             #[inline(always)]
-            pub const fn extract(mut buf: &[u8]) -> $crate::protocol::ZTArray<<$ty as Enliven>::WithLifetime> {
+            pub const fn extract(mut buf: &[u8]) -> $crate::protocol::ZTArray<<$ty as $crate::protocol::Enliven>::WithLifetime> {
                 $crate::protocol::ZTArray::new(buf)
             }
             #[inline]
-            pub const fn measure<'a>(buffer: &'a[<$ty as Enliven<'a>>::ForMeasure]) -> usize {
+            pub const fn measure<'a>(buffer: &'a[<$ty as $crate::protocol::Enliven<'a>>::ForMeasure]) -> usize {
                 let mut size = 1;
                 let mut index = 0;
                 loop {
                     if index + 1 > buffer.len() {
                         break;
                     }
-                    size += FieldAccess::<$ty>::measure(&buffer[index]);
+                    size += $crate::protocol::FieldAccess::<$ty>::measure(&buffer[index]);
                     index += 1;
                 }
                 size
             }
             #[inline(always)]
-            pub fn copy_to_buf(buf: &mut $crate::protocol::writer::BufWriter, value: &[<$ty as Enliven<'_>>::ForBuilder]) {
+            pub fn copy_to_buf(buf: &mut $crate::protocol::writer::BufWriter, value: &[<$ty as $crate::protocol::Enliven<'_>>::ForBuilder]) {
                 for elem in value {
-                    FieldAccess::<$ty>::copy_to_buf(buf, elem);
+                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf(buf, elem);
                 }
                 buf.write_u8(0);
             }

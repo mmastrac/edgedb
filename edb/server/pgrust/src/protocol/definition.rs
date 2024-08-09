@@ -1,4 +1,6 @@
-use super::gen::{message_group, protocol};
+use super::message_group::message_group;
+use super::gen::protocol2;
+use crate::protocol::meta::*;
 
 message_group!(
     Backend = [
@@ -64,7 +66,7 @@ message_group!(
     ]
 );
 
-protocol!(
+protocol2!(
 
 // A generic base for all Postgres mtype/mlen-style messages.
 struct Message {

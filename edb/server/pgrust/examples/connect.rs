@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let socket = UnixSocket::new_stream()?;
             let client = socket.connect(path).await?;
             let conn = PGConn::new(client, args.username, args.password, args.database);
-            conn.task().await?;
+            // tokio::task::spawn_local(conn.task());
         }
         _ => return Err("Must specify either a TCP address or a Unix socket path".into()),
     }
