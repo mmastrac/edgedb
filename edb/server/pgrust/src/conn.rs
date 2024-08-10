@@ -1,9 +1,7 @@
 use crate::{
     auth::{self, generate_salted_password, ClientEnvironment, ClientTransaction, Sha256Out},
     protocol::{
-        builder, match_message, AuthenticationMessage, AuthenticationOk, AuthenticationSASL,
-        AuthenticationSASLContinue, AuthenticationSASLFinal, BackendKeyData, ErrorResponse,
-        Message, ParameterStatus, ReadyForQuery,
+        builder, match_message, AuthenticationMessage, AuthenticationOk, AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, Backend, BackendKeyData, ErrorResponse, Message, ParameterStatus, ReadyForQuery
     },
 };
 use base64::Engine;
@@ -127,6 +125,9 @@ impl<S: Stream> PGConn<S> {
                         let mlen = message.mlen();
                         eprintln!("Connecting Unknown message: {} (len {mlen})", message.mtype() as char)
                     },
+                    unknown => {
+                        eprintln!("Unknown message: {unknown:?}");
+                    }
                 });
             }
             ConnState::Scram(tx, env) => {
@@ -160,6 +161,9 @@ impl<S: Stream> PGConn<S> {
                         let mlen = message.mlen();
                         eprintln!("SCRAM Unknown message: {} (len {mlen})", message.mtype() as char)
                     },
+                    unknown => {
+                        eprintln!("Unknown message: {unknown:?}");
+                    }
                 });
             }
             ConnState::Connected => {
@@ -178,6 +182,9 @@ impl<S: Stream> PGConn<S> {
                         let mlen = message.mlen();
                         eprintln!("Connected Unknown message: {} (len {mlen})", message.mtype() as char)
                     },
+                    unknown => {
+                        eprintln!("Unknown message: {unknown:?}");
+                    }
                 });
             }
             ConnState::Ready => {}

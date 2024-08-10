@@ -6,17 +6,19 @@ macro_rules! struct_elaborate {
         $( #[ $sdoc:meta ] )*
         struct $name:ident {
             $(
-                $( #[ $fdoc:meta ] )* $field:ident : $type:ty $( = $value:literal)?
+                $( #[ $fdoc:meta ] )* $field:ident : 
+                    $ty:tt $(< $($generics:ident),+ >)?
+                    $( = $value:literal)?
             ),*
             $(,)?
         }
     ) => {
         // paste! is necessary here because it allows us to re-interpret a "ty"
         // as an explicit type pattern below.
-        paste::paste!(struct_elaborate!(__builder_type__ fields($(
+        paste::paste!(struct_elaborate!(__builder_type__ fixed(fixed_offset) fields($(
             [
                 // Note that we double the type so we can re-use some output patterns in `__builder_type__`
-                type($type)($type),
+                type( $ty $(<$($generics),+>)? )( $ty $(<$($generics),+>)? ),
                 value($($value)?),
                 docs($([$fdoc]),*),
                 name($field),
@@ -25,47 +27,53 @@ macro_rules! struct_elaborate {
     };
 
     // End of push-down automation - jumps to `__finalize__`
-    (__builder_type__ fields() accum($($faccum:tt)*) original($($original:tt)*)) => {
+    (__builder_type__ fixed($fixed:ident) fields() accum($($faccum:tt)*) original($($original:tt)*)) => {
         struct_elaborate!(__finalize__ accum($($faccum)*) original($($original)*));
     };
 
+    // Skip __builder_value__ for 'len'
+    (__builder_type__ fixed($fixed:ident) fields([type(len)(len), value(), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder__ fixed($fixed=>$fixed) fields([type($crate::protocol::meta::Length), size(fixed=fixed), value(auto=auto), $($rest)*] $($frest)*) $($srest)*);
+    };
+    (__builder_type__ fixed($fixed:ident) fields([type(len)(len), value($($value:tt)+), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder__ fixed($fixed=>$fixed) fields([type($crate::protocol::meta::Length), size(fixed=fixed), value(value=($($value)*)), $($rest)*] $($frest)*) $($srest)*);
+    };
     // Pattern match on known fixed-sized types and mark them as `size(fixed=fixed)`
-    (__builder_type__ fields([type(u8)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder_value__ fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
+    (__builder_type__ fixed($fixed:ident) fields([type([u8; 4])($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder_value__ fixed($fixed=>$fixed) fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
     };
-    (__builder_type__ fields([type(i16)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder_value__ fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
+    (__builder_type__ fixed($fixed:ident) fields([type(u8)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder_value__ fixed($fixed=>$fixed) fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
     };
-    (__builder_type__ fields([type(i32)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder_value__ fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
+    (__builder_type__ fixed($fixed:ident)fields([type(i16)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder_value__ fixed($fixed=>$fixed) fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
     };
-    // Skip __builder_value__ for Length
-    (__builder_type__ fields([type(Length)($ty:ty), value(), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder__ fields([type($ty), size(fixed=fixed), value(auto=auto), $($rest)*] $($frest)*) $($srest)*);
+    (__builder_type__ fixed($fixed:ident) fields([type(i32)($ty:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder_value__ fixed($fixed=>$fixed) fields([type($ty), size(fixed=fixed), $($rest)*] $($frest)*) $($srest)*);
     };
 
     // Fallback for other types - variable sized
-    (__builder_type__ fields([type($ty:ty)($ty2:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder_value__ fields([type($ty), size(variable=variable), $($rest)*] $($frest)*) $($srest)*);
+    (__builder_type__ fixed($fixed:ident) fields([type($ty:ty)($ty2:ty), $($rest:tt)*] $($frest:tt)*) $($srest:tt)*) => {
+        struct_elaborate!(__builder_value__ fixed($fixed=>no_fixed_offset) fields([type($ty), size(variable=variable), $($rest)*] $($frest)*) $($srest)*);
     };
 
     // Next, mark the presence or absence of a value
-    (__builder_value__ fields([
+    (__builder_value__ fixed($fixed:ident=>$fixed_new:ident) fields([
         type($ty:ty), size($($size:tt)*), value(), $($rest:tt)*
     ] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder__ fields([type($ty), size($($size)*), value(no_value=no_value), $($rest)*] $($frest)*) $($srest)*);
+        struct_elaborate!(__builder__ fixed($fixed=>$fixed_new) fields([type($ty), size($($size)*), value(no_value=no_value), $($rest)*] $($frest)*) $($srest)*);
     };
-    (__builder_value__ fields([
+    (__builder_value__ fixed($fixed:ident=>$fixed_new:ident) fields([
         type($ty:ty), size($($size:tt)*), value($($value:tt)+), $($rest:tt)*
     ] $($frest:tt)*) $($srest:tt)*) => {
-        struct_elaborate!(__builder__ fields([type($ty), size($($size)*), value(value=($($value)*)), $($rest)*] $($frest)*) $($srest)*);
+        struct_elaborate!(__builder__ fixed($fixed=>$fixed_new) fields([type($ty), size($($size)*), value(value=($($value)*)), $($rest)*] $($frest)*) $($srest)*);
     };
 
     // Push down the field to the accumulator
-    (__builder__ fields([
+    (__builder__ fixed($fixed:ident=>$fixed_new:ident) fields([
         type($ty:ty), size($($size:tt)*), value($($value:tt)*), docs($($fdoc:tt),*), name($field:ident),
     ] $($frest:tt)*) accum($($faccum:tt)*) original($($original:tt)*)) => {
-        struct_elaborate!(__builder_type__ fields($($frest)*) accum(
+        struct_elaborate!(__builder_type__ fixed($fixed_new) fields($($frest)*) accum(
             $($faccum)*
             {
                 name($field),
@@ -73,6 +81,7 @@ macro_rules! struct_elaborate {
                 size($($size)*),
                 value($($value)*),
                 docs($($fdoc),*),
+                fixed($fixed=$fixed),
             },
         ) original($($original)*));
     };
@@ -174,6 +183,7 @@ macro_rules! protocol2_builder {
             type B<'a> = [<$name Builder>]<'a>;
             type F<'a> = [<$name Fields>];
 
+            $( #[$sdoc] )?
             pub struct $name<'a> {
                 buf: &'a [u8],
                 fields: [usize; META::FIELD_COUNT + 1]
@@ -307,6 +317,10 @@ macro_rules! protocol2_builder {
                 pub fn copy_to_buf(buf: &mut $crate::protocol::writer::BufWriter, builder: &B) {
                     builder.copy_to_buf(buf)
                 }
+                #[inline(always)]
+                pub fn copy_to_buf_ref(buf: &mut $crate::protocol::writer::BufWriter, builder: &B) {
+                    builder.copy_to_buf(buf)
+                }
             }
 
             $crate::protocol::field_access!{[<$name Meta>]}
@@ -346,7 +360,7 @@ macro_rules! protocol2_builder {
                 pub const fn measure(&self) -> usize {
                     let mut size = 0;
                     $(
-                        r#if!(__has__ [$($variable_marker)?] { size += $crate::protocol::FieldAccess::<$type>::measure(self.$field); });
+                        r#if!(__has__ [$($variable_marker)?] { size += $crate::protocol::FieldAccess::<$type>::measure(&self.$field); });
                         r#if!(__has__ [$($fixed_marker)?] { size += std::mem::size_of::<$type>(); });
                     )*
                     size
@@ -439,6 +453,8 @@ pub(crate) use {protocol2, protocol2_builder, struct_elaborate, r#if};
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     mod fixed_only {
         protocol2!(struct FixedOnly {
             a: u8,
@@ -472,6 +488,25 @@ mod tests {
         );
     }
 
+    mod length {
+        use crate::protocol::meta::Length;
+        protocol2!(
+            struct WithLength {
+                a: u8,
+                l: len,
+            }
+        );
+    }
+
+    mod array {
+        protocol2!(
+            struct StaticArray {
+                a: u8,
+                l: [u8; 4],
+            }
+        );
+    }
+
     macro_rules! assert_stringify {
         (($($struct:tt)*), $expected:literal) => {
             struct_elaborate!(assert_stringify(__internal__ $expected) => $($struct)*);
@@ -490,12 +525,53 @@ mod tests {
     fn fixed_size_fields() {
         assert_stringify!((struct Foo {
             a: u8,
+            b: u8,
         }), r#"struct Foo
 {
     docs(),
     fields({
         name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
-        docs(),
+        docs(), fixed(fixed_offset = fixed_offset),
+    },
+    {
+        name(b), type (u8), size(fixed = fixed), value(no_value = no_value),
+        docs(), fixed(fixed_offset = fixed_offset),
+    },),
+}"#);
+    }
+
+    #[test]
+    fn mixed_fields() {
+        assert_stringify!((struct Foo {
+            a: u8,
+            l: len,
+            s: ZTString,
+            c: i16,
+            d: [u8; 4]
+        }), r#"struct Foo
+{
+    docs(),
+    fields({
+        name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
+        docs(), fixed(fixed_offset = fixed_offset),
+    },
+    {
+        name(l), type (crate::protocol::meta::Length), size(fixed = fixed),
+        value(auto = auto), docs(), fixed(fixed_offset = fixed_offset),
+    },
+    {
+        name(s), type (ZTString), size(variable = variable),
+        value(no_value = no_value), docs(),
+        fixed(fixed_offset = fixed_offset),
+    },
+    {
+        name(c), type (i16), size(fixed = fixed), value(no_value = no_value),
+        docs(), fixed(no_fixed_offset = no_fixed_offset),
+    },
+    {
+        name(d), type ([u8; 4]), size(fixed = fixed),
+        value(no_value = no_value), docs(),
+        fixed(no_fixed_offset = no_fixed_offset),
     },),
 }"#);
     }

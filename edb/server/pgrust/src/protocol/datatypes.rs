@@ -77,6 +77,10 @@ impl FieldAccess<RestMeta> {
     pub fn copy_to_buf(buf: &mut BufWriter, value: &[u8]) {
         buf.write(value)
     }
+    #[inline(always)]
+    pub fn copy_to_buf_ref(buf: &mut BufWriter, value: &[u8]) {
+        buf.write(value)
+    }
 }
 
 /// A zero-terminated string.
@@ -151,11 +155,25 @@ impl FieldAccess<ZTStringMeta> {
         buf.write(value.as_bytes());
         buf.write_u8(0);
     }
+    #[inline(always)]
+    pub fn copy_to_buf_ref(buf: &mut BufWriter, value: &str) {
+        buf.write(value.as_bytes());
+        buf.write_u8(0);
+    }
 }
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 /// An encoded row value.
-pub struct Encoded<'a> {
-    buf: Option<&'a [u8]>,
+pub enum Encoded<'a> {
+    #[default]
+    Null,
+    Value(&'a [u8]),
+}
+
+impl <'a> AsRef<Encoded<'a>> for Encoded<'a> {
+    fn as_ref(&self) -> &Encoded<'a> {
+        self
+    }
 }
 
 field_access!(EncodedMeta);
@@ -164,13 +182,34 @@ array_access!(EncodedMeta);
 pub struct EncodedMeta {}
 impl<'a> Enliven<'a> for EncodedMeta {
     type WithLifetime = Encoded<'a>;
-    type ForMeasure = &'a [u8];
-    type ForBuilder = &'a [u8];
+    type ForMeasure = Encoded<'a>;
+    type ForBuilder = Encoded<'a>;
 }
 
 impl<'a> Encoded<'a> {
-    pub const fn new(buf: Option<&'a [u8]>) -> Self {
-        Self { buf }
+}
+
+impl PartialEq<str> for Encoded<'_> {
+    fn eq(&self, other: &str) -> bool {
+        self == &Encoded::Value(other.as_bytes())
+    }
+}
+
+impl PartialEq<&str> for Encoded<'_> {
+    fn eq(&self, other: &&str) -> bool {
+        self == &Encoded::Value(other.as_bytes())
+    }
+}
+
+impl PartialEq<[u8]> for Encoded<'_> {
+    fn eq(&self, other: &[u8]) -> bool {
+        self == &Encoded::Value(other)
+    }
+}
+
+impl PartialEq<&[u8]> for Encoded<'_> {
+    fn eq(&self, other: &&[u8]) -> bool {
+        self == &Encoded::Value(other)
     }
 }
 
@@ -179,11 +218,12 @@ impl FieldAccess<EncodedMeta> {
     pub const fn size_of_field_at(buf: &[u8]) -> usize {
         const N: usize = std::mem::size_of::<i32>();
         if let Some(len) = buf.first_chunk::<N>() {
-            let mut len = i32::from_be_bytes(*len);
+            let len = i32::from_be_bytes(*len);
             if len == -1 {
-                len = 0;
+                N
+            } else {
+                len as usize + N
             }
-            len as usize * N + N
         } else {
             panic!()
         }
@@ -194,21 +234,36 @@ impl FieldAccess<EncodedMeta> {
         if let Some((len, array)) = buf.split_first_chunk::<N>() {
             let len = i32::from_be_bytes(*len);
             if len == -1 {
-                Encoded::new(None)
+                Encoded::Null
             } else {
-                Encoded::new(Some(array))
+                Encoded::Value(array)
             }
         } else {
             panic!()
         }
     }
     #[inline(always)]
-    pub const fn measure(_: &[u8]) -> usize {
-        unimplemented!()
+    pub const fn measure(value: &Encoded) -> usize {
+        match value {
+            Encoded::Null => std::mem::size_of::<i32>(),
+            Encoded::Value(value) => value.len() + std::mem::size_of::<i32>(),
+        }
     }
     #[inline(always)]
-    pub fn copy_to_buf(_: &mut BufWriter, _: &[u8]) -> Result<usize, usize> {
-        unimplemented!()
+    pub fn copy_to_buf(buf: &mut BufWriter, value: Encoded) {
+        Self::copy_to_buf_ref(buf, &value)
+    }
+    #[inline(always)]
+    pub fn copy_to_buf_ref(buf: &mut BufWriter, value: &Encoded) {
+        match value {
+            Encoded::Null => {
+                buf.write(&[0xff, 0xff, 0xff, 0xff])
+            }
+            Encoded::Value(value) => {
+                let len: i32 = value.len() as _;
+                buf.write(&len.to_be_bytes());
+            }
+        }
     }
 }
 
@@ -234,10 +289,6 @@ impl FieldAccess<LengthMeta> {
     #[inline(always)]
     pub const fn extract(buf: &[u8]) -> usize {
         FieldAccess::<i32>::extract(buf) as _
-    }
-    #[inline(always)]
-    pub const fn measure(value: usize) -> usize {
-        FieldAccess::<i32>::measure(value as i32)
     }
     #[inline(always)]
     pub fn copy_to_buf(buf: &mut BufWriter, value: usize) {
@@ -285,10 +336,6 @@ macro_rules! basic_types {
                 }
             }
             #[inline(always)]
-            pub const fn measure(_: $ty) -> usize {
-                std::mem::size_of::<$ty>()
-            }
-            #[inline(always)]
             pub fn copy_to_buf(buf: &mut BufWriter, value: $ty) {
                 buf.write(&<$ty>::to_be_bytes(value));
             }
@@ -320,10 +367,6 @@ macro_rules! basic_types {
                     i += 1;
                 }
                 out
-            }
-            #[inline(always)]
-            pub const fn measure(_: [$ty; S]) -> usize {
-                std::mem::size_of::<$ty>() * S
             }
             #[inline(always)]
             pub fn copy_to_buf(mut buf: &mut BufWriter, value: [$ty; S]) {

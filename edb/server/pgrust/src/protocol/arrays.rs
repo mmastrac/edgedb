@@ -204,7 +204,8 @@ macro_rules! array_access {
                     if index + 1 > buffer.len() {
                         break;
                     }
-                    size += $crate::protocol::FieldAccess::<$ty>::measure(&buffer[index]);
+                    let item = &buffer[index];
+                    size += $crate::protocol::FieldAccess::<$ty>::measure(item);
                     index += 1;
                 }
                 size
@@ -213,7 +214,7 @@ macro_rules! array_access {
             pub fn copy_to_buf<'a>(buf: &mut $crate::protocol::writer::BufWriter, value: &'a[<$ty as $crate::protocol::Enliven<'a>>::ForBuilder]) {
                 buf.write(&<$len>::to_be_bytes(value.len() as _));
                 for elem in value {
-                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf(buf, elem);
+                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf_ref(buf, elem);
                 }
             }
 
@@ -246,7 +247,8 @@ macro_rules! array_access {
                     if index + 1 > buffer.len() {
                         break;
                     }
-                    size += $crate::protocol::FieldAccess::<$ty>::measure(&buffer[index]);
+                    let item = &buffer[index];
+                    size += $crate::protocol::FieldAccess::<$ty>::measure(item);
                     index += 1;
                 }
                 size
@@ -254,7 +256,7 @@ macro_rules! array_access {
             #[inline(always)]
             pub fn copy_to_buf(buf: &mut $crate::protocol::writer::BufWriter, value: &[<$ty as $crate::protocol::Enliven<'_>>::ForBuilder]) {
                 for elem in value {
-                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf(buf, elem);
+                    $crate::protocol::FieldAccess::<$ty>::copy_to_buf_ref(buf, elem);
                 }
                 buf.write_u8(0);
             }

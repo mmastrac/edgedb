@@ -37,6 +37,8 @@ pub use arrays::{Array, ArrayIter, ZTArray, ZTArrayIter};
 pub use datatypes::{Encoded, Rest, ZTString};
 #[allow(unused)]
 pub use definition::data::*;
+pub use definition::{Backend, Frontend};
+pub use message_group::match_message;
 
 pub trait Enliven<'a> {
     type WithLifetime;
@@ -78,21 +80,6 @@ macro_rules! field_access {
     };
 }
 pub(crate) use field_access;
-
-macro_rules! match_message {
-    ($buf:expr, $messages:path {
-        $(( $i1:path $(as $i2:ident )?) => $impl:block),* $(,)?
-    }) => {
-        $(
-            if <$i1>::is(&$buf) {
-                $(let $i2 = <$i1>::new($buf);)?
-                $impl;
-            } else
-        )*
-        {}
-    };
-}
-pub(crate) use match_message;
 
 #[cfg(test)]
 mod tests {
@@ -277,5 +264,54 @@ mod tests {
         assert_eq!(message.mlen(), 13);
         assert_eq!(message.mtype(), b'R');
         assert_eq!(message.data(), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_query_messages() {
+        let data: Vec<u8> = vec![
+            0x54, 0x00, 0x00, 0x00, 0x21, 0x00, 0x01, 0x3f,  b'c', b'o', b'l', b'u', b'm', b'n', 0x3f, 0x00, 
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x00, 0x17, 0x00, 0x04, 0xff, 0xff, 0xff, 0xff, 
+            0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x0b, 0x00,  0x01, 0x00, 0x00, 0x00, 0x01, b'1', b'C', 0x00, 
+            0x00, 0x00, 0x0d, b'S', b'E', b'L', b'E', b'C',  b'T', b' ', b'1', 0x00, 0x5a, 0x00, 0x00, 0x00, 
+            0x05, b'I'
+        ];
+
+        let mut buf = data.as_slice();
+
+        while !buf.is_empty() {
+            let len = Message::new(buf).mlen() + 1;
+            match_message!(&buf[..len], Backend {
+                (RowDescription as row) => {
+                    assert_eq!(row.fields().len(), 1);
+                    let field = row.fields().into_iter().next().unwrap();
+                    assert_eq!(field.name(), "?column?");
+                    assert_eq!(field.data_type_oid(), 23);
+                    assert_eq!(field.format_code(), 0);
+                },
+                (DataRow as row) => {
+                    assert_eq!(row.values().len(), 1);
+                    assert_eq!(row.values().into_iter().next().unwrap(), "1");
+                },
+                (CommandComplete as complete) => {
+                    assert_eq!(complete.tag(), "SELECT 1");
+                },
+                (ReadyForQuery as ready) => {
+                    assert_eq!(ready.status(), b'I');
+                },
+                unknown => {
+                    panic!("Unknown message type: {:?}", unknown);
+                }
+            });
+            buf = &buf[len..];
+        }
+    }
+
+    #[test]
+    fn test_encode_data_row() {
+        builder::DataRow {
+            values: &[
+               Encoded::Value(b"1"),
+            ]
+        }.to_vec();
     }
 }
