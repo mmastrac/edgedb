@@ -1,12 +1,47 @@
 /// Performs a first-pass parse on a struct, filling out some additional
 /// metadata that makes the jobs of further macro passes much simpler.
+///
+/// This macro takes a `next` parameter which allows you to funnel the
+/// structured data from the macro into the next macro. The complex parsing
+/// happens in here using a "push-down automation" technique.
+///
+/// The term "push-down automation" here refers to how metadata and parsed
+/// information are "pushed down" through the macro’s recursive structure. Each
+/// level of the macro adds its own layer of processing and metadata
+/// accumulation, eventually leading to the final output.
+///
+/// The `struct_elaborate!` macro is a tool designed to perform an initial
+/// parsing pass on a Rust `struct`, enriching it with metadata to facilitate
+/// further macro processing. It begins by extracting and analyzing the fields
+/// of the `struct`, capturing associated metadata such as attributes and types.
+/// This macro takes a `next` parameter, which is another macro to be invoked
+/// after the current one completes its task, allowing for a seamless chaining
+/// of macros where each one builds upon the results of the previous.
+///
+/// The macro first classifies each field based on its type, distinguishing
+/// between fixed-size types (like `u8`, `i16`, and arrays) and variable-sized
+/// types. It also tracks whether a field has a default value, ensuring that
+/// this information is passed along. To handle repetitive or complex patterns,
+/// especially when dealing with type information, the macro utilizes the
+/// `paste!` macro for duplication and transformation.
+///
+/// As it processes each field, the macro recursively calls itself, accumulating
+/// metadata and updating the state. This recursive approach is structured into
+/// different stages, such as `__builder_type__`, `__builder_value__`, and
+/// `__finalize__`, each responsible for handling specific aspects of the
+/// parsing process.
+///
+/// Once all fields have been processed, the macro enters the final stage, where
+/// it reconstructs an enriched `struct`-like data blob using the accumulated
+/// metadata. It then passes this enriched `struct` to the `next` macro for
+/// further processing.
 macro_rules! struct_elaborate {
     (
-        $next:ident $( ($($next_args:tt)*) )? => 
+        $next:ident $( ($($next_args:tt)*) )? =>
         $( #[ $sdoc:meta ] )*
         struct $name:ident {
             $(
-                $( #[ $fdoc:meta ] )* $field:ident : 
+                $( #[ $fdoc:meta ] )* $field:ident :
                     $ty:tt $(< $($generics:ident),+ >)?
                     $( = $value:literal)?
             ),*
@@ -15,15 +50,26 @@ macro_rules! struct_elaborate {
     ) => {
         // paste! is necessary here because it allows us to re-interpret a "ty"
         // as an explicit type pattern below.
-        paste::paste!(struct_elaborate!(__builder_type__ fixed(fixed_offset) fields($(
-            [
-                // Note that we double the type so we can re-use some output patterns in `__builder_type__`
-                type( $ty $(<$($generics),+>)? )( $ty $(<$($generics),+>)? ),
-                value($($value)?),
-                docs($([$fdoc]),*),
-                name($field),
-            ]
-        )*) accum() original($next $( ($($next_args)*) )? => $(#[$sdoc])* struct $name {})););
+        struct_elaborate!(__builder_type__
+            // Pass down a "fixed offset" flag that indicates whether the
+            // current field is at a fixed offset. This gets reset to
+            // `no_fixed_offset` when we hit a variable-sized field.
+            fixed(fixed_offset)
+            fields($(
+                [
+                    // Note that we double the type so we can re-use some output
+                    // patterns in `__builder_type__`
+                    type( $ty $(<$($generics),+>)? )( $ty $(<$($generics),+>)? ),
+                    value($($value)?),
+                    docs($([$fdoc]),*),
+                    name($field),
+                ]
+            )*)
+            // Accumulator for field data.
+            accum()
+            // Save the original struct parts so we can build the remainder of
+            // the struct at the end.
+            original($next $( ($($next_args)*) )? => $(#[$sdoc])* struct $name {}));
     };
 
     // End of push-down automation - jumps to `__finalize__`
@@ -341,7 +387,7 @@ macro_rules! protocol2_builder {
             r#if!(__is_empty__ [$($($variable_marker)?)*] {
                 // No variable-sized fields
                 #[derive(Default, Eq, PartialEq)]
-                pub struct [<$name Measure>]<'a> {      
+                pub struct [<$name Measure>]<'a> {
                     _phantom: std::marker::PhantomData<&'a ()>
                 }
             } else {
@@ -383,7 +429,7 @@ macro_rules! protocol2_builder {
             r#if!(__is_empty__ [$($($no_value)?)*] {
                 // No unfixed-value fields
                 #[derive(Default, Eq, PartialEq)]
-                pub struct [<$name Builder>]<'a> {      
+                pub struct [<$name Builder>]<'a> {
                     _phantom: std::marker::PhantomData<&'a ()>
                 }
             } else {
@@ -449,16 +495,18 @@ macro_rules! protocol2_builder {
     };
 }
 
-pub(crate) use {protocol2, protocol2_builder, struct_elaborate, r#if};
+pub(crate) use {protocol2, protocol2_builder, r#if, struct_elaborate};
 
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
     mod fixed_only {
-        protocol2!(struct FixedOnly {
-            a: u8,
-        });
+        protocol2!(
+            struct FixedOnly {
+                a: u8,
+            }
+        );
     }
 
     mod fixed_only_value {
@@ -508,71 +556,78 @@ mod tests {
     }
 
     macro_rules! assert_stringify {
-        (($($struct:tt)*), $expected:literal) => {
-            struct_elaborate!(assert_stringify(__internal__ $expected) => $($struct)*);
+        (($($struct:tt)*), ($($expected:tt)*)) => {
+            struct_elaborate!(assert_stringify(__internal__ ($($expected)*)) => $($struct)*);
         };
-        (__internal__ $expected:literal, $($struct:tt)*) => {
-            assert_eq!(stringify!($($struct)*), $expected);
+        (__internal__ ($($expected:tt)*), $($struct:tt)*) => {
+            assert_eq!(stringify!($($struct)*), stringify!($($expected)*));
         };
     }
 
     #[test]
     fn empty_struct() {
-        assert_stringify!((struct Foo {}), "struct Foo { docs(), fields(), }");
+        assert_stringify!((struct Foo {}), (struct Foo { docs(), fields(), }));
     }
 
     #[test]
     fn fixed_size_fields() {
         assert_stringify!((struct Foo {
-            a: u8,
-            b: u8,
-        }), r#"struct Foo
-{
-    docs(),
-    fields({
-        name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
-        docs(), fixed(fixed_offset = fixed_offset),
-    },
-    {
-        name(b), type (u8), size(fixed = fixed), value(no_value = no_value),
-        docs(), fixed(fixed_offset = fixed_offset),
-    },),
-}"#);
+                    a: u8,
+                    b: u8,
+                }), (struct Foo
+        {
+            docs(),
+            fields({
+                name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
+                docs(), fixed(fixed_offset = fixed_offset),
+            },
+            {
+                name(b), type (u8), size(fixed = fixed), value(no_value = no_value),
+                docs(), fixed(fixed_offset = fixed_offset),
+            },),
+        }));
     }
 
     #[test]
     fn mixed_fields() {
         assert_stringify!((struct Foo {
-            a: u8,
-            l: len,
-            s: ZTString,
-            c: i16,
-            d: [u8; 4]
-        }), r#"struct Foo
-{
-    docs(),
-    fields({
-        name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
-        docs(), fixed(fixed_offset = fixed_offset),
-    },
-    {
-        name(l), type (crate::protocol::meta::Length), size(fixed = fixed),
-        value(auto = auto), docs(), fixed(fixed_offset = fixed_offset),
-    },
-    {
-        name(s), type (ZTString), size(variable = variable),
-        value(no_value = no_value), docs(),
-        fixed(fixed_offset = fixed_offset),
-    },
-    {
-        name(c), type (i16), size(fixed = fixed), value(no_value = no_value),
-        docs(), fixed(no_fixed_offset = no_fixed_offset),
-    },
-    {
-        name(d), type ([u8; 4]), size(fixed = fixed),
-        value(no_value = no_value), docs(),
-        fixed(no_fixed_offset = no_fixed_offset),
-    },),
-}"#);
+                    a: u8,
+                    l: len,
+                    s: ZTString,
+                    c: i16,
+                    d: [u8; 4],
+                    e: ZTArray<ZTString>,
+                }), (struct Foo
+        {
+            docs(),
+            fields({
+                name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
+                docs(), fixed(fixed_offset = fixed_offset),
+            },
+            {
+                name(l), type (crate::protocol::meta::Length), size(fixed = fixed),
+                value(auto = auto), docs(), fixed(fixed_offset = fixed_offset),
+            },
+            {
+                name(s), type (ZTString), size(variable = variable),
+                value(no_value = no_value), docs(),
+                fixed(fixed_offset = fixed_offset),
+            },
+            {
+                name(c), type (i16), size(fixed = fixed), value(no_value = no_value),
+                docs(), fixed(no_fixed_offset = no_fixed_offset),
+            },
+            {
+                name(d), type ([u8; 4]), size(fixed = fixed),
+                value(no_value = no_value), docs(),
+                fixed(no_fixed_offset = no_fixed_offset),
+            },
+            {
+                name(e), type (ZTArray<ZTString>), size(variable = variable),
+                value(no_value = no_value), docs(),
+                fixed(no_fixed_offset = no_fixed_offset),
+            },
+        ),
+        }));
     }
 }

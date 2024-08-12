@@ -1,5 +1,5 @@
-use super::message_group::message_group;
 use super::gen::protocol2;
+use super::message_group::message_group;
 use crate::protocol::meta::*;
 
 message_group!(

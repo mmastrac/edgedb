@@ -49,10 +49,10 @@ macro_rules! message_group {
 pub(crate) use message_group;
 
 /// Peform a match on a message.
-/// 
+///
 /// ```rust
 /// use pgrust::protocol::*;
-/// 
+///
 /// let buf = [0, 1, 2];
 /// match_message!(&buf, Backend {
 ///     (BackendKeyData as data) => {
@@ -67,7 +67,7 @@ pub(crate) use message_group;
 #[macro_export]
 macro_rules! __match_message {
     ($buf:expr, $messages:ty {
-        $(( $i1:path $(as $i2:ident )?) => $impl:block,)* 
+        $(( $i1:path $(as $i2:ident )?) => $impl:block,)*
         $unknown:ident => $unknown_impl:block $(,)?
     }) => {
         {

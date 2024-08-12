@@ -1,15 +1,22 @@
 use crate::{
     auth::{self, generate_salted_password, ClientEnvironment, ClientTransaction, Sha256Out},
     protocol::{
-        builder, match_message, AuthenticationMessage, AuthenticationOk, AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, Backend, BackendKeyData, ErrorResponse, Message, ParameterStatus, ReadyForQuery
+        builder, match_message, messages, AuthenticationMessage, AuthenticationOk,
+        AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, Backend,
+        BackendKeyData, ErrorResponse, Message, ParameterStatus, ReadyForQuery,
     },
 };
 use base64::Engine;
 use rand::Rng;
-use std::future::poll_fn;
 use std::{
     cell::RefCell,
     task::{ready, Poll},
+};
+use std::{
+    collections::VecDeque,
+    future::{poll_fn, Future},
+    rc::Rc,
+    time::Duration,
 };
 use tokio::io::ReadBuf;
 
@@ -27,7 +34,48 @@ pub enum PGError {
     Scram(#[from] auth::SCRAMError),
 }
 
-pub struct PGConn<S: Stream> {
+pub struct Client<S: Stream> {
+    conn: Rc<PGConn<S>>,
+}
+
+impl<S: Stream> Client<S> {
+    /// Create a new PostgreSQL client and a background task.
+    pub fn new(
+        parameters: ConnectionParameters,
+        stm: S,
+    ) -> (Self, impl Future<Output = Result<(), PGError>>) {
+        let conn = Rc::new(PGConn::new(
+            stm,
+            parameters.username,
+            parameters.password,
+            parameters.database,
+        ));
+        let task = conn.clone().task();
+        (Self { conn }, task)
+    }
+
+    pub async fn ready(&self) -> Result<(), PGError> {
+        loop {
+            if !self.conn.is_ready() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    pub fn query(&self, query: &str) -> impl Future<Output = Result<Vec<Vec<String>>, PGError>> {
+        self.conn.clone().query(query.to_owned())
+    }
+}
+
+pub struct ConnectionParameters {
+    pub username: String,
+    pub password: String,
+    pub database: String,
+}
+
+struct PGConn<S: Stream> {
     stm: RefCell<S>,
     state: RefCell<ConnState>,
 }
@@ -39,11 +87,15 @@ struct Credentials {
     database: String,
 }
 
+struct QueryWaiter {
+    tx: tokio::sync::mpsc::Sender<()>,
+}
+
 enum ConnState {
     Connecting(Credentials),
     Scram(ClientTransaction, ClientEnvironmentImpl),
     Connected,
-    Ready,
+    Ready(VecDeque<QueryWaiter>),
 }
 
 struct ClientEnvironmentImpl {
@@ -71,6 +123,10 @@ impl<S: Stream> PGConn<S> {
             })
             .into(),
         }
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(&*self.state.borrow(), ConnState::Ready(..))
     }
 
     async fn write(&self, mut buf: &[u8]) -> Result<(), PGError> {
@@ -103,6 +159,7 @@ impl<S: Stream> PGConn<S> {
                 match_message!(message, Backend {
                     (AuthenticationOk) => {
                         eprintln!("auth ok");
+                        eprintln!("-> Connected");
                         *state = ConnState::Connected;
                     },
                     (AuthenticationSASL as sasl) => {
@@ -119,6 +176,7 @@ impl<S: Stream> PGConn<S> {
                             mechanism: "SCRAM-SHA-256",
                             response: &initial_message,
                         }.to_vec();
+                        eprintln!("-> Scram");
                         *state = ConnState::Scram(tx, env);
                     },
                     (Message as message) => {
@@ -147,6 +205,7 @@ impl<S: Stream> PGConn<S> {
                     },
                     (AuthenticationOk) => {
                         eprintln!("auth ok");
+                        eprintln!("-> Connected");
                         *state = ConnState::Connected;
                     },
                     (AuthenticationMessage as auth) => {
@@ -175,8 +234,9 @@ impl<S: Stream> PGConn<S> {
                         eprintln!("key={:?} pid={:?}", key_data.key(), key_data.pid());
                     },
                     (ReadyForQuery as ready) => {
-                        eprintln!("ready: {:?}", ready.status());
-                        *state = ConnState::Ready;
+                        eprintln!("ready: {:?}", ready.status() as char);
+                        eprintln!("-> Ready");
+                        *state = ConnState::Ready(Default::default());
                     },
                     (Message as message) => {
                         let mlen = message.mlen();
@@ -187,13 +247,19 @@ impl<S: Stream> PGConn<S> {
                     }
                 });
             }
-            ConnState::Ready => {}
+            ConnState::Ready(queue) => {
+                match_message!(message, Backend {
+                    unknown => {
+                        eprintln!("Unknown message: {unknown:?}");
+                    }
+                });
+            }
         }
 
         Ok(send)
     }
 
-    pub async fn task(&self) -> Result<(), PGError> {
+    pub async fn task(self: Rc<Self>) -> Result<(), PGError> {
         // Only allow connection in the initial state
         let credentials = match &*self.state.borrow() {
             ConnState::Connecting(credentials) => credentials.clone(),
@@ -253,6 +319,18 @@ impl<S: Stream> PGConn<S> {
         }
 
         Ok(())
+    }
+
+    pub async fn query(self: Rc<Self>, query: String) -> Result<Vec<Vec<String>>, PGError> {
+        let message = builder::Query { query: &query }.to_vec();
+        self.write(&message).await?;
+        let message = builder::Sync::default().to_vec();
+        self.write(&message).await?;
+
+        // let (tx, rx) = tokio::sync::oneshot::channel();
+        loop {
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
     }
 }
 

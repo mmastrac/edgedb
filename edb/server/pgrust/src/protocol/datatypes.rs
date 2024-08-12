@@ -170,7 +170,7 @@ pub enum Encoded<'a> {
     Value(&'a [u8]),
 }
 
-impl <'a> AsRef<Encoded<'a>> for Encoded<'a> {
+impl<'a> AsRef<Encoded<'a>> for Encoded<'a> {
     fn as_ref(&self) -> &Encoded<'a> {
         self
     }
@@ -186,8 +186,7 @@ impl<'a> Enliven<'a> for EncodedMeta {
     type ForBuilder = Encoded<'a>;
 }
 
-impl<'a> Encoded<'a> {
-}
+impl<'a> Encoded<'a> {}
 
 impl PartialEq<str> for Encoded<'_> {
     fn eq(&self, other: &str) -> bool {
@@ -256,9 +255,7 @@ impl FieldAccess<EncodedMeta> {
     #[inline(always)]
     pub fn copy_to_buf_ref(buf: &mut BufWriter, value: &Encoded) {
         match value {
-            Encoded::Null => {
-                buf.write(&[0xff, 0xff, 0xff, 0xff])
-            }
+            Encoded::Null => buf.write(&[0xff, 0xff, 0xff, 0xff]),
             Encoded::Value(value) => {
                 let len: i32 = value.len() as _;
                 buf.write(&len.to_be_bytes());

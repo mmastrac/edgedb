@@ -8,8 +8,8 @@
 mod arrays;
 mod datatypes;
 mod definition;
-mod message_group;
 mod gen;
+mod message_group;
 mod writer;
 
 /// Metatypes
@@ -65,8 +65,11 @@ pub(crate) struct FieldAccess<T: for<'a> Enliven<'a>> {
 /// Delegate to the concrete `FieldAccess` for each type we want to extract.
 macro_rules! field_access {
     ($ty:ty) => {
-        impl<'a> $crate::protocol::FieldAccessNonConst<'a, <$ty as $crate::protocol::Enliven<'a>>::WithLifetime>
-            for <$ty as $crate::protocol::Enliven<'a>>::WithLifetime
+        impl<'a>
+            $crate::protocol::FieldAccessNonConst<
+                'a,
+                <$ty as $crate::protocol::Enliven<'a>>::WithLifetime,
+            > for <$ty as $crate::protocol::Enliven<'a>>::WithLifetime
         {
             #[inline(always)]
             fn size_of_field_at(buf: &[u8]) -> usize {
@@ -269,11 +272,11 @@ mod tests {
     #[test]
     fn test_query_messages() {
         let data: Vec<u8> = vec![
-            0x54, 0x00, 0x00, 0x00, 0x21, 0x00, 0x01, 0x3f,  b'c', b'o', b'l', b'u', b'm', b'n', 0x3f, 0x00, 
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x00, 0x17, 0x00, 0x04, 0xff, 0xff, 0xff, 0xff, 
-            0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x0b, 0x00,  0x01, 0x00, 0x00, 0x00, 0x01, b'1', b'C', 0x00, 
-            0x00, 0x00, 0x0d, b'S', b'E', b'L', b'E', b'C',  b'T', b' ', b'1', 0x00, 0x5a, 0x00, 0x00, 0x00, 
-            0x05, b'I'
+            0x54, 0x00, 0x00, 0x00, 0x21, 0x00, 0x01, 0x3f, b'c', b'o', b'l', b'u', b'm', b'n',
+            0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00, 0x04,
+            0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x01, b'1', b'C', 0x00, 0x00, 0x00, 0x0d, b'S', b'E', b'L', b'E', b'C',
+            b'T', b' ', b'1', 0x00, 0x5a, 0x00, 0x00, 0x00, 0x05, b'I',
         ];
 
         let mut buf = data.as_slice();
@@ -309,9 +312,8 @@ mod tests {
     #[test]
     fn test_encode_data_row() {
         builder::DataRow {
-            values: &[
-               Encoded::Value(b"1"),
-            ]
-        }.to_vec();
+            values: &[Encoded::Value(b"1")],
+        }
+        .to_vec();
     }
 }
