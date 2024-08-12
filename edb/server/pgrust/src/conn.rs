@@ -3,7 +3,8 @@ use crate::{
     protocol::{
         builder, match_message, messages, AuthenticationMessage, AuthenticationOk,
         AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, Backend,
-        BackendKeyData, ErrorResponse, Message, ParameterStatus, ReadyForQuery,
+        BackendKeyData, CommandComplete, DataRow, ErrorResponse, Message, ParameterStatus,
+        ReadyForQuery, RowDescription,
     },
 };
 use base64::Engine;
@@ -88,7 +89,7 @@ struct Credentials {
 }
 
 struct QueryWaiter {
-    tx: tokio::sync::mpsc::Sender<()>,
+    tx: tokio::sync::mpsc::UnboundedSender<()>,
 }
 
 enum ConnState {
@@ -179,6 +180,11 @@ impl<S: Stream> PGConn<S> {
                         eprintln!("-> Scram");
                         *state = ConnState::Scram(tx, env);
                     },
+                    (ErrorResponse as error) => {
+                        for field in error.fields() {
+                            eprintln!("error: {} {:?}", field.etype(), field.value());
+                        }
+                    },
                     (Message as message) => {
                         let mlen = message.mlen();
                         eprintln!("Connecting Unknown message: {} (len {mlen})", message.mtype() as char)
@@ -238,6 +244,11 @@ impl<S: Stream> PGConn<S> {
                         eprintln!("-> Ready");
                         *state = ConnState::Ready(Default::default());
                     },
+                    (ErrorResponse as error) => {
+                        for field in error.fields() {
+                            eprintln!("error: {} {:?}", field.etype(), field.value());
+                        }
+                    },
                     (Message as message) => {
                         let mlen = message.mlen();
                         eprintln!("Connected Unknown message: {} (len {mlen})", message.mtype() as char)
@@ -249,6 +260,23 @@ impl<S: Stream> PGConn<S> {
             }
             ConnState::Ready(queue) => {
                 match_message!(message, Backend {
+                    (RowDescription as row) => {
+                        for field in row.fields() {
+                            eprintln!("field: {:?}", field.name());
+                        }
+                    },
+                    (DataRow as row) => {
+                        for field in row.values() {
+                            eprintln!("field: {:?}", field);
+                        }
+                    },
+                    (CommandComplete as complete) => {
+                        eprintln!("complete: {:?}", complete.tag());
+                    },
+                    (ReadyForQuery as ready) => {
+                        eprintln!("ready: {:?}", ready.status() as char);
+                        queue.pop_front();
+                    },
                     unknown => {
                         eprintln!("Unknown message: {unknown:?}");
                     }
@@ -322,15 +350,20 @@ impl<S: Stream> PGConn<S> {
     }
 
     pub async fn query(self: Rc<Self>, query: String) -> Result<Vec<Vec<String>>, PGError> {
+        let mut rx = match &mut *self.state.borrow_mut() {
+            ConnState::Ready(queue) => {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                queue.push_back(QueryWaiter { tx });
+                rx
+            }
+            _ => return Err(PGError::InvalidState),
+        };
+
         let message = builder::Query { query: &query }.to_vec();
         self.write(&message).await?;
-        let message = builder::Sync::default().to_vec();
-        self.write(&message).await?;
 
-        // let (tx, rx) = tokio::sync::oneshot::channel();
-        loop {
-            tokio::time::sleep(Duration::from_millis(1000)).await;
-        }
+        rx.recv().await;
+        Ok(vec![])
     }
 }
 

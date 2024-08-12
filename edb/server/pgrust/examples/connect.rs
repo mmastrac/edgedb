@@ -39,11 +39,21 @@ struct Args {
         default_value = "postgres"
     )]
     database: String,
+
+    /// SQL statements to run
+    #[clap(
+        name = "statements",
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Zero or more SQL statements to run (defaults to 'select 1')"
+    )]
+    statements: Option<Vec<String>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    eprintln!("{args:?}");
 
     let local = LocalSet::new();
     local
@@ -68,17 +78,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     tokio::task::spawn_local(task);
                     conn.ready().await?;
-                    let q1 = conn.query("select 1; select 1;");
-                    let q2 = conn.query("select 1;");
-                    tokio::task::spawn_local(q1);
-                    tokio::task::spawn_local(q2);
+
+                    let local = LocalSet::new();
+                    let statements = args
+                        .statements
+                        .unwrap_or_else(|| vec!["select 1;".to_string()]);
+                    eprintln!("{statements:?}");
+                    for statement in statements {
+                        local.spawn_local(conn.query(&statement));
+                    }
+                    local.await;
                 }
                 _ => return Err("Must specify either a TCP address or a Unix socket path".into()),
             }
             Result::<(), Box<dyn std::error::Error>>::Ok(())
         })
         .await?;
-    local.await;
 
     Ok(())
 }
