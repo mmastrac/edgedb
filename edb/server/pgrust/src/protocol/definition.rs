@@ -70,7 +70,7 @@ message_group!(
 
 protocol2!(
 
-// A generic base for all Postgres mtype/mlen-style messages.
+/// A generic base for all Postgres mtype/mlen-style messages.
 struct Message {
     /// Identifies the message.
     mtype: u8,

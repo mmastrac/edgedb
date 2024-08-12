@@ -41,7 +41,7 @@ macro_rules! struct_elaborate {
         $( #[ $sdoc:meta ] )*
         struct $name:ident {
             $(
-                $( #[ $fdoc:meta ] )* $field:ident :
+                $( #[ doc = $fdoc:literal ] )* $field:ident :
                     $ty:tt $(< $($generics:ident),+ >)?
                     $( = $value:literal)?
             ),*
@@ -61,7 +61,7 @@ macro_rules! struct_elaborate {
                     // patterns in `__builder_type__`
                     type( $ty $(<$($generics),+>)? )( $ty $(<$($generics),+>)? ),
                     value($($value)?),
-                    docs($([$fdoc]),*),
+                    docs($($fdoc)*),
                     name($field),
                 ]
             )*)
@@ -126,7 +126,7 @@ macro_rules! struct_elaborate {
                 type($ty),
                 size($($size)*),
                 value($($value)*),
-                docs($($fdoc),*),
+                docs(concat!($($fdoc)*)),
                 fixed($fixed=$fixed),
             },
         ) original($($original)*));
@@ -219,32 +219,47 @@ macro_rules! protocol2_builder {
             type($type:ty),
             size($($size:tt)*),
             value($(value = ($value:expr))? $(no_value = $no_value:ident)? $(auto = $auto:ident)?),
+            docs($fdoc:expr),
             $($rest:tt)*
         },)*),
     }) => {
         paste::paste!(
+            /// Our struct we are building.
             type S<'a> = $name<'a>;
+            /// The meta-struct for the struct we are building.
             type META = [<$name Meta>];
+            /// The measurement struct (used for `measure`).
             type M<'a> = [<$name Measure>]<'a>;
+            /// The builder struct (used for `to_vec` and other build operations)
             type B<'a> = [<$name Builder>]<'a>;
+            /// The fields ordinal enum.
             type F<'a> = [<$name Fields>];
 
             $( #[$sdoc] )?
+            #[doc = concat!("\n\nAvailable fields: \n\n" $(
+                , " - [`", stringify!($field), "`](Self::", stringify!($field), "()): ", $fdoc, 
+                $( "  (value = `", stringify!($value), "`)", )?
+                "\n\n"
+            )* )]
             pub struct $name<'a> {
-                buf: &'a [u8],
-                fields: [usize; META::FIELD_COUNT + 1]
+                /// Our zero-copy buffer.
+                #[doc(hidden)]
+                __buf: &'a [u8],
+                /// The calculated field offsets.
+                #[doc(hidden)]
+                __field_offsets: [usize; META::FIELD_COUNT + 1]
             }
 
             impl PartialEq for $name<'_> {
                 fn eq(&self, other: &Self) -> bool {
-                    self.buf.eq(other.buf)
+                    self.__buf.eq(other.__buf)
                 }
             }
 
             impl std::fmt::Debug for $name<'_> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     let mut s = f.debug_struct(stringify!($name));
-                    s.field("buf", &self.buf);
+                    s.field("buf", &self.__buf);
                     s.finish()
                 }
             }
@@ -268,31 +283,34 @@ macro_rules! protocol2_builder {
                     true
                 }
 
+                /// Creates a new instance of this struct from a given buffer.
                 #[inline]
                 pub const fn new(mut buf: &'a [u8]) -> Self {
-                    let mut fields = [0; META::FIELD_COUNT + 1];
+                    let mut __field_offsets = [0; META::FIELD_COUNT + 1];
                     let mut offset = 0;
                     let mut index = 0;
                     $(
-                        fields[index] = offset;
+                        __field_offsets[index] = offset;
                         offset += $crate::protocol::FieldAccess::<$type>::size_of_field_at(buf.split_at(offset).1);
                         index += 1;
                     )*
-                    fields[index] = offset;
+                    __field_offsets[index] = offset;
 
                     Self {
-                        buf,
-                        fields,
+                        __buf: buf,
+                        __field_offsets,
                     }
                 }
 
                 $(
+                    #[doc = $fdoc]
                     #[allow(unused)]
                     #[inline]
                     pub const fn $field<'s>(&'s self) -> <$type as $crate::protocol::Enliven<'a>>::WithLifetime where 's : 'a {
-                        let offset1 = self.fields[F::$field as usize];
-                        let offset2 = self.fields[F::$field as usize + 1];
-                        let (_, buf) = self.buf.split_at(offset1);
+                        // Perform a const buffer extraction operation
+                        let offset1 = self.__field_offsets[F::$field as usize];
+                        let offset2 = self.__field_offsets[F::$field as usize + 1];
+                        let (_, buf) = self.__buf.split_at(offset1);
                         let (buf, _) = buf.split_at(offset2 - offset1);
                         $crate::protocol::FieldAccess::<$type>::extract(buf)
                     }
@@ -308,6 +326,7 @@ macro_rules! protocol2_builder {
             type($type:ty),
             size($($size:tt)*),
             value($(value = ($value:expr))? $(no_value = $no_value:ident)? $(auto = $auto:ident)?),
+            docs($fdoc:expr),
             $($rest:tt)*
         },)*),
     }) => {
@@ -380,29 +399,34 @@ macro_rules! protocol2_builder {
             name($field:ident),
             type($type:ty),
             size( $( fixed=$fixed_marker:ident )? $( variable=$variable_marker:ident )? ),
+            value($(value = ($value:expr))? $(no_value = $no_value:ident)? $(auto = $auto:ident)?),
+            docs($fdoc:expr),
             $($rest:tt)*
         },)*),
     }) => {
         paste::paste!(
             r#if!(__is_empty__ [$($($variable_marker)?)*] {
+                $( #[$sdoc] )?
                 // No variable-sized fields
                 #[derive(Default, Eq, PartialEq)]
                 pub struct [<$name Measure>]<'a> {
-                    _phantom: std::marker::PhantomData<&'a ()>
+                    __no_fields_use_default: std::marker::PhantomData<&'a ()>
                 }
             } else {
+                $( #[$sdoc] )?
                 pub struct [<$name Measure>]<'a> {
                     // Because of how macros may expand in the context of struct
                     // fields, we need to do a * repeat, then a ? repeat and
                     // somehow use $variable_marker in the remainder of the
                     // pattern.
-                    $($(
+                    $($(  
+                        #[doc = $fdoc]
                         pub $field: r#if!(__has__ [$variable_marker] {<$type as $crate::protocol::Enliven<'a>>::ForMeasure}),
                     )?)*
                 }
             });
 
-            impl <'a> M<'a> {
+            impl M<'_> {
                 pub const fn measure(&self) -> usize {
                     let mut size = 0;
                     $(
@@ -422,29 +446,33 @@ macro_rules! protocol2_builder {
             type($type:ty),
             size($($size:tt)*),
             value($(value = ($value:expr))? $(no_value = $no_value:ident)? $(auto = $auto:ident)?),
+            docs($fdoc:expr),
             $($rest:tt)*
         },)*),
     }) => {
         paste::paste!(
             r#if!(__is_empty__ [$($($no_value)?)*] {
+                $( #[$sdoc] )?
                 // No unfixed-value fields
                 #[derive(Default, Eq, PartialEq)]
                 pub struct [<$name Builder>]<'a> {
-                    _phantom: std::marker::PhantomData<&'a ()>
+                    __no_fields_use_default: std::marker::PhantomData<&'a ()>
                 }
             } else {
+                $( #[$sdoc] )?
                 #[derive(Default, Eq, PartialEq)]
                 pub struct [<$name Builder>]<'a> {
                     // Because of how macros may expand in the context of struct
                     // fields, we need to do a * repeat, then a ? repeat and
                     // somehow use $no_value in the remainder of the pattern.
                     $($(
+                        #[doc = $fdoc]
                         pub $field: r#if!(__has__ [$no_value] {<$type as $crate::protocol::Enliven<'a>>::ForBuilder}),
                     )?)*
                 }
             });
 
-            impl <'a> B<'a> {
+            impl B<'_> {
                 #[allow(unused)]
                 pub fn copy_to_buf(&self, buf: &mut $crate::protocol::writer::BufWriter) {
                     $(
