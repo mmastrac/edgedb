@@ -26,7 +26,8 @@ import re
 import ssl as ssl_module
 import stat
 import warnings
-from . import _pg_rust
+import edb.server._pg_rust
+
 
 class SSLMode(enum.IntEnum):
     disable = 0
@@ -180,10 +181,6 @@ def _parse_tls_version(tls_version: str) -> ssl_module.TLSVersion:
         )
 
 
-def _dot_postgresql_path(filename: str) -> str:
-    return str((pathlib.Path.home() / '.postgresql' / filename).resolve())
-
-
 def parse_dsn(
     dsn: str,
 ) -> Tuple[
@@ -191,12 +188,13 @@ def parse_dsn(
     ConnectionParameters,
 ]:
     try:
-        parsed, ssl_paths = _pg_rust.parse_dsn(getpass.getuser(),
+        parsed, ssl_paths = edb.server._pg_rust.parse_dsn(getpass.getuser(),
                                                str(get_pg_home_directory()),
                                                dsn)
     except Exception as e:
         raise ValueError(f"{e.args[0]}") from e
 
+    # Extract SSL configuration from the dict
     ssl = None
     sslmode = SSLMode.disable
     ssl_config = parsed['ssl']
@@ -228,6 +226,8 @@ def parse_dsn(
         if ssl_config['min_protocol_version']:
             ssl.minimum_version = _parse_tls_version(
                 ssl_config['min_protocol_version'])
+
+    # Extract hosts from the dict
     addrs: List[Tuple[str, int]] = []
     for host in parsed['hosts']:
         if 'Hostname' in host:
@@ -243,6 +243,7 @@ def parse_dsn(
             path = host['Path']
             addrs.append((path, 5432))
 
+    # Extract password from the dict
     passfile: pathlib.Path | None = None
     password: str | None = ""
     password_config = parsed['password']
@@ -253,6 +254,7 @@ def parse_dsn(
     elif 'Specified' in password_config:
         password = password_config['Specified']
 
+    # Database/user/password/connect_timeout
     database: str = str(parsed['database']) or ''
     user: str = str(parsed['user']) or ''
     if passfile:
@@ -260,9 +262,9 @@ def parse_dsn(
                                               addrs=addrs,
                                               database=database,
                                               user=user)
-
     connect_timeout = parsed['connect_timeout']['secs'] \
         if parsed['connect_timeout'] else None
+
     params = ConnectionParameters(
         user=user,
         password=password,
