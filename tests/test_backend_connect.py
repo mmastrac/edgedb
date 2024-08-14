@@ -625,7 +625,7 @@ class TestConnectParams(tb.TestCase):
         {
             'name': 'dsn_only_unix',
             'dsn': 'postgresql:///dbname?host=/unix_sock/test&user=spam',
-            'result': ([('/unix_sock/test', 5432)], {
+            'result': ([('/unix_sock/test', 0)], {
                 'user': 'spam',
                 'database': 'dbname'})
         },
@@ -713,7 +713,7 @@ class TestConnectParams(tb.TestCase):
             'name': 'dsn_only_quoted_unix_host_port_in_params',
             'dsn': 'postgres://user@?port=56226&host=%2Ftmp',
             'result': (
-                [('/tmp', 5432)],
+                [('/tmp', 0)],
                 {
                     'user': 'user',
                     'database': 'user',
@@ -729,7 +729,7 @@ class TestConnectParams(tb.TestCase):
             'result': (
                 [(
                     '/cloudsql/project:region:instance-name',
-                    5432,
+                    0,
                 )], {
                     'user': 'spam',
                     'database': 'db'
@@ -745,7 +745,7 @@ class TestConnectParams(tb.TestCase):
                     ('127.0.0.1', 5432),
                     (
                         '/cloudsql/project:region:instance-name',
-                        5432,
+                        0,
                     ),
                     ('localhost', 5433)
                 ], {
@@ -969,7 +969,7 @@ class TestConnectParams(tb.TestCase):
                     passfile.name
                 ),
                 'result': (
-                    [('/tmp', 5432)],
+                    [('/tmp', 0)],
                     {
                         'password': 'password from pgpass for localhost',
                         'user': 'user',

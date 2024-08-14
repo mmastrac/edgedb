@@ -241,7 +241,7 @@ def parse_dsn(
             addrs.append((hostname, host['IP'][1]))
         elif 'Path' in host:
             path = host['Path']
-            addrs.append((path, 5432))
+            addrs.append((path, 0))
 
     # Extract password from the dict
     passfile: pathlib.Path | None = None
