@@ -1,11 +1,45 @@
-use openssl::ssl::SslMethod;
-use pyo3::{pymodule, types::PyModule, PyResult, Python};
+use std::path::Path;
+
+use crate::conn_string::{self, EnvVar};
+use pyo3::{
+    exceptions::PyException,
+    pyfunction, pymodule,
+    types::{PyByteArray, PyModule},
+    wrap_pyfunction, PyAny, PyResult, Python,
+};
+use serde_pickle::SerOptions;
+
+impl EnvVar for (String, &PyAny) {
+    fn read(&self, name: &'static str) -> Option<std::borrow::Cow<str>> {
+        // os.environ[name], or the default user if not
+        let py_str = self.1.get_item(name).ok();
+        if name == "PGUSER" && py_str.is_none() {
+            Some((&self.0).into())
+        } else {
+            py_str.map(|s| s.to_string().into())
+        }
+    }
+}
+
+#[pyfunction]
+fn parse_dsn(py: Python, username: String, home_dir: String, s: String) -> PyResult<&PyAny> {
+    let pickle = py.import("pickle")?;
+    let loads = pickle.getattr("loads")?;
+    let os = py.import("os")?;
+    let environ = os.getattr("environ")?;
+    match conn_string::parse_postgres_url(&s, (username, environ)) {
+        Ok(res) => {
+            let paths = res.ssl.resolve(Path::new(&home_dir))?;
+            // Use serde_pickle to get a python-compatible representation of the result
+            let vec = serde_pickle::to_vec(&(res, paths), SerOptions::new()).unwrap();
+            loads.call1((PyByteArray::new(py, &vec),))
+        }
+        Err(err) => Err(PyException::new_err(err.to_string())),
+    }
+}
 
 #[pymodule]
 fn _pg_rust(py: Python, m: &PyModule) -> PyResult<()> {
-    let ctx = openssl::ssl::SslContextBuilder::new(SslMethod::tls_server())
-        .unwrap()
-        .build();
-    openssl::ssl::Ssl::new(&ctx).unwrap();
+    m.add_function(wrap_pyfunction!(parse_dsn, m)?)?;
     Ok(())
 }

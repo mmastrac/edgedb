@@ -1,17 +1,21 @@
 use itertools::Itertools;
-use url::{Url};
-use std::borrow::{Borrow, Cow};
+use percent_encoding::percent_decode_str;
+use serde_derive::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
-use std::path::{Path, PathBuf};
+use url::Url;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum ParseError {
-    #[error("Invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\", got {0}")]
+    #[error(
+        "Invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\", got {0}"
+    )]
     InvalidScheme(String),
 
     #[error("Invalid value for parameter \"{0}\": \"{1}\"")]
@@ -33,7 +37,7 @@ pub enum ParseError {
     UrlParseError(#[from] url::ParseError),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Host {
     Hostname(String, u16),
     IP(IpAddr, u16, Option<String>),
@@ -41,7 +45,7 @@ pub enum Host {
     Abstract(String),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Password {
     /// The password is unspecified and should be read from the user's default
     /// passfile if it exists.
@@ -53,81 +57,98 @@ pub enum Password {
     Passfile(String),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ConnectionParameters {
-    hosts: Vec<Host>,
-    database: String,
-    user: String,
-    password: Password,
-    connect_timeout: Option<Duration>,
-    server_settings: HashMap<String, String>,
-    ssl: Ssl,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ConnectionParameters {
+    pub hosts: Vec<Host>,
+    pub database: String,
+    pub user: String,
+    pub password: Password,
+    pub connect_timeout: Option<Duration>,
+    pub server_settings: HashMap<String, String>,
+    pub ssl: Ssl,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum Ssl {
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum Ssl {
     #[default]
     Disable,
     Enable(SslMode, SslParameters),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum SslMode {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum SslMode {
+    #[serde(rename = "allow")]
     Allow,
+    #[serde(rename = "prefer")]
     Prefer,
+    #[serde(rename = "require")]
     Require,
+    #[serde(rename = "verify_ca")]
     VerifyCA,
+    #[serde(rename = "verify_full")]
     VerifyFull,
 }
 
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
-struct SslParameters {
-    cert: Option<PathBuf>,
-    key: Option<PathBuf>,
-    password: Option<String>,
-    rootcert: Option<PathBuf>,
-    crl: Option<PathBuf>,
-    min_protocol_version: Option<String>,
-    max_protocol_version: Option<String>,
-    keylog_filename: Option<PathBuf>,
-    verify_crl_check_chain: Option<bool>,
+#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SslParameters {
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+    pub password: Option<String>,
+    pub rootcert: Option<PathBuf>,
+    pub crl: Option<PathBuf>,
+    pub min_protocol_version: Option<String>,
+    pub max_protocol_version: Option<String>,
+    pub keylog_filename: Option<PathBuf>,
+    pub verify_crl_check_chain: Option<bool>,
 }
 
-#[derive(Default)]
-struct SslPaths {
-    rootcert: Option<PathBuf>,
-    crl: Option<PathBuf>,
-    key: Option<PathBuf>,
-    cert: Option<PathBuf>,
+#[derive(Default, Serialize)]
+pub struct SslPaths {
+    pub rootcert: Option<PathBuf>,
+    pub crl: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+    pub cert: Option<PathBuf>,
 }
 
 impl Ssl {
     /// Resolve the SSL paths relative to the home directory.
     pub fn resolve(&self, home_dir: &Path) -> Result<SslPaths, std::io::Error> {
-        let postgres_dir = home_dir.join(".postgresql");
+        let postgres_dir = home_dir;
         let Ssl::Enable(mode, params) = self else {
             return Ok(SslPaths::default());
         };
         let mut paths = SslPaths::default();
         if *mode >= SslMode::Require {
-            let root_cert = params.rootcert.clone().unwrap_or_else(|| postgres_dir.join("root.crt"));
+            let root_cert = params
+                .rootcert
+                .clone()
+                .unwrap_or_else(|| postgres_dir.join("root.crt"));
             if root_cert.exists() {
                 paths.rootcert = Some(root_cert);
             } else if *mode > SslMode::Require {
-                return Err(std::io::Error::new(ErrorKind::NotFound, 
-                    "Root certificate not found. Either provide the file or change sslmode to disable SSL certificate verification."));
+                return Err(std::io::Error::new(ErrorKind::NotFound,
+                    format!("Root certificate not found: {root_cert:?}. Either provide the file or change sslmode to disable SSL certificate verification.")));
             }
 
-            let crl = params.crl.clone().unwrap_or_else(|| postgres_dir.join("root.crl"));
+            let crl = params
+                .crl
+                .clone()
+                .unwrap_or_else(|| postgres_dir.join("root.crl"));
             if crl.exists() {
                 paths.crl = Some(crl);
             }
         }
-        let key = params.key.clone().unwrap_or_else(|| postgres_dir.join("postgresql.key"));
+        let key = params
+            .key
+            .clone()
+            .unwrap_or_else(|| postgres_dir.join("postgresql.key"));
         if key.exists() {
             paths.key = Some(key);
         }
-        let cert = params.cert.clone().unwrap_or_else(|| postgres_dir.join("postgresql.crt"));
+        let cert = params
+            .cert
+            .clone()
+            .unwrap_or_else(|| postgres_dir.join("postgresql.crt"));
         if cert.exists() {
             paths.cert = Some(cert);
         }
@@ -135,11 +156,15 @@ impl Ssl {
     }
 }
 
-trait EnvVar {
+pub trait EnvVar {
     fn read(&self, name: &'static str) -> Option<Cow<str>>;
 }
 
-impl <K, V> EnvVar for HashMap<K, V> where K: std::hash::Hash + Eq + std::borrow::Borrow<str>, V: std::borrow::Borrow<str> {
+impl<K, V> EnvVar for HashMap<K, V>
+where
+    K: std::hash::Hash + Eq + std::borrow::Borrow<str>,
+    V: std::borrow::Borrow<str>,
+{
     fn read(&self, name: &'static str) -> Option<Cow<str>> {
         if let Some(value) = self.get(name) {
             Some(value.borrow().into())
@@ -176,8 +201,30 @@ impl EnvVar for () {
     }
 }
 
+fn maybe_decode(str: Cow<str>) -> Cow<str> {
+    if str.contains('%') {
+        if let Ok(str) = percent_decode_str(&str).decode_utf8() {
+            str.into_owned().into()
+        } else {
+            str.into_owned().into()
+        }
+    } else {
+        str
+    }
+}
+
 fn parse_port(port: &str) -> Result<u16, ParseError> {
-    port.parse::<u16>().map_err(|_| ParseError::InvalidPort(port.to_string()))
+    if port.contains('%') {
+        let decoded = percent_decode_str(port)
+            .decode_utf8()
+            .map_err(|_| ParseError::InvalidPort(port.to_string()))?;
+        decoded
+            .parse::<u16>()
+            .map_err(|_| ParseError::InvalidPort(port.to_string()))
+    } else {
+        port.parse::<u16>()
+            .map_err(|_| ParseError::InvalidPort(port.to_string()))
+    }
 }
 
 fn parse_hostlist(
@@ -199,15 +246,23 @@ fn parse_hostlist(
             Host::Path(hostspec.to_string())
         } else if hostspec.starts_with('[') {
             // Handling IPv6 address
-            let end_bracket = hostspec.find(']').ok_or_else(|| {
-                ParseError::InvalidHostname(hostspec.to_string())
-            })?;
+            let end_bracket = hostspec
+                .find(']')
+                .ok_or_else(|| ParseError::InvalidHostname(hostspec.to_string()))?;
 
             // Extract interface (optional) after %
             let (interface, ipv6_part, port_part) = if let Some(pos) = hostspec.find('%') {
-                (Some(hostspec[pos + 1..end_bracket].to_string()), &hostspec[1..pos], &hostspec[end_bracket + 1..])
+                (
+                    Some(hostspec[pos + 1..end_bracket].to_string()),
+                    &hostspec[1..pos],
+                    &hostspec[end_bracket + 1..],
+                )
             } else {
-                (None, &hostspec[1..end_bracket], &hostspec[end_bracket + 1..])
+                (
+                    None,
+                    &hostspec[1..end_bracket],
+                    &hostspec[end_bracket + 1..],
+                )
             };
             let addr = Ipv6Addr::from_str(ipv6_part)
                 .map_err(|_| ParseError::InvalidHostname(hostspec.to_string()))?;
@@ -239,18 +294,23 @@ fn parse_hostlist(
     Ok(hosts)
 }
 
-
-fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParameters, ParseError> {
+pub fn parse_postgres_url(
+    url_str: &str,
+    env: impl EnvVar,
+) -> Result<ConnectionParameters, ParseError> {
     let url_str = if let Some(url) = url_str.strip_prefix("postgres://") {
         url
     } else if let Some(url) = url_str.strip_prefix("postgresql://") {
         url
     } else {
-        return Err(ParseError::InvalidScheme(url_str.split(':').next().unwrap_or_default().to_owned()));
+        return Err(ParseError::InvalidScheme(
+            url_str.split(':').next().unwrap_or_default().to_owned(),
+        ));
     };
 
-    let (authority, path_and_query) = match url_str.split_once('/') {
-        Some((authority, path_and_query)) => (authority, path_and_query),
+    let path_or_query = url_str.find(|c| c == '?' || c == '/');
+    let (authority, path_and_query) = match path_or_query {
+        Some(index) => url_str.split_at(index),
         None => (url_str, ""),
     };
 
@@ -259,23 +319,36 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
         None => ("", authority),
     };
 
-    let url = Url::parse(&format!("unused://{auth}@host/{path_and_query}"))?;
+    let url = Url::parse(&format!("unused://{auth}@host{path_and_query}"))?;
 
     let mut server_settings = HashMap::new();
-    let mut host: Option<Cow<str>> = if host.is_empty() { None } else { Some(host.into()) };
+    let mut host: Option<Cow<str>> = if host.is_empty() {
+        None
+    } else {
+        Some(host.into())
+    }
+    .map(maybe_decode);
     let mut port = None;
 
     let mut user: Option<Cow<str>> = match url.username() {
         "" => None,
-        user => Some(user.into()),
+        user => {
+            let decoded = percent_decode_str(&user);
+            if let Ok(user) = decoded.decode_utf8() {
+                Some(user)
+            } else {
+                Some(user.into())
+            }
+        }
     };
-    let mut password: Option<Cow<str>> = url.password().map(|p| p.into());
+    let mut password: Option<Cow<str>> = url.password().map(|p| p.into()).map(maybe_decode);
     let mut database: Option<Cow<str>> = match url.path() {
-        ""|"/" => None,
-        path => Some(path.trim_start_matches('/').into())
-    };
+        "" | "/" => None,
+        path => Some(path.trim_start_matches('/').into()),
+    }
+    .map(maybe_decode);
 
-    let mut passfile = None;    
+    let mut passfile = None;
     let mut connect_timeout = None;
 
     let mut sslmode = None;
@@ -293,10 +366,15 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
                 if host.is_none() {
                     host = Some(value);
                 }
-            },
+            }
             "port" => {
                 if port.is_none() {
-                    port = Some(value.split(',').map(parse_port).collect::<Result<Vec<u16>, _>>()?);
+                    port = Some(
+                        value
+                            .split(',')
+                            .map(parse_port)
+                            .collect::<Result<Vec<u16>, _>>()?,
+                    );
                 }
             }
             "dbname" | "database" => {
@@ -337,14 +415,22 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
     }
     if port.is_none() {
         if let Some(value) = env.read("PGPORT") {
-            port = Some(value.split(',').map(parse_port).collect::<Result<Vec<u16>, _>>()?);
+            port = Some(
+                value
+                    .split(',')
+                    .map(parse_port)
+                    .collect::<Result<Vec<u16>, _>>()?,
+            );
         }
     }
 
     if host.is_none() {
         host = Some("/run/postgresql,/var/run/postgresql,/tmp,/private/tmp,localhost".into());
     }
-    let host = host.as_ref().map(|s| s.split(',').collect_vec()).unwrap_or_default();
+    let host = host
+        .as_ref()
+        .map(|s| s.split(',').collect_vec())
+        .unwrap_or_default();
     let hosts = parse_hostlist(&host, port.as_deref().unwrap_or_default())?;
 
     if hosts.is_empty() {
@@ -391,7 +477,9 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
     let connect_timeout = match connect_timeout {
         None => None,
         Some(s) => {
-            let seconds = s.parse::<isize>().map_err(|_| ParseError::InvalidParameter("connect_timeout".to_string(), s.to_string()))?;
+            let seconds = s.parse::<isize>().map_err(|_| {
+                ParseError::InvalidParameter("connect_timeout".to_string(), s.to_string())
+            })?;
             if seconds <= 0 {
                 None
             } else {
@@ -400,7 +488,9 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
         }
     };
 
-    let any_tcp = hosts.iter().any(|host| matches!(host, Host::Hostname(..) | Host::IP(..)));
+    let any_tcp = hosts
+        .iter()
+        .any(|host| matches!(host, Host::Hostname(..) | Host::IP(..)));
 
     if sslmode.is_none() {
         sslmode = env.read("PGSSLMODE");
@@ -418,9 +508,14 @@ fn parse_postgres_url(url_str: &str, env: impl EnvVar) -> Result<ConnectionParam
                 "allow" => SslMode::Allow,
                 "prefer" => SslMode::Prefer,
                 "require" => SslMode::Require,
-                "verify-ca" => SslMode::VerifyCA,
-                "verify-full" => SslMode::VerifyFull,
-                _ => return Err(ParseError::InvalidParameter("sslmode".to_string(), sslmode.to_string())),
+                "verify_ca" | "verify-ca" => SslMode::VerifyCA,
+                "verify_full" | "verify-full" => SslMode::VerifyFull,
+                _ => {
+                    return Err(ParseError::InvalidParameter(
+                        "sslmode".to_string(),
+                        sslmode.to_string(),
+                    ))
+                }
             };
             let mut ssl = SslParameters::default();
             if sslmode >= SslMode::Require {
@@ -477,82 +572,168 @@ mod tests {
 
     #[test]
     fn test_parse_hostlist() {
-        assert_eq!(parse_hostlist(&["hostname"], &[1234]), Ok(vec![
-            Host::Hostname("hostname".to_string(), 1234)
-        ]));
-        assert_eq!(parse_hostlist(&["hostname:4321"], &[1234]), Ok(vec![
-            Host::Hostname("hostname".to_string(), 4321)
-        ]));
-        assert_eq!(parse_hostlist(&["/path"], &[1234]), Ok(vec![
-            Host::Path("/path".to_string())
-        ]));
-        assert_eq!(parse_hostlist(&["[2001:db8::1234]", "[::1]"], &[1234]), Ok(vec![
-            Host::IP(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1234)), 1234, None),
-            Host::IP(IpAddr::V6(Ipv6Addr::LOCALHOST), 1234, None),
-        ]));
-        assert_eq!(parse_hostlist(&["[2001:db8::1234%eth0]"], &[1234]), Ok(vec![
-            Host::IP(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1234)), 1234, Some("eth0".to_string())),
-        ]));
+        assert_eq!(
+            parse_hostlist(&["hostname"], &[1234]),
+            Ok(vec![Host::Hostname("hostname".to_string(), 1234)])
+        );
+        assert_eq!(
+            parse_hostlist(&["hostname:4321"], &[1234]),
+            Ok(vec![Host::Hostname("hostname".to_string(), 4321)])
+        );
+        assert_eq!(
+            parse_hostlist(&["/path"], &[1234]),
+            Ok(vec![Host::Path("/path".to_string())])
+        );
+        assert_eq!(
+            parse_hostlist(&["[2001:db8::1234]", "[::1]"], &[1234]),
+            Ok(vec![
+                Host::IP(
+                    IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1234)),
+                    1234,
+                    None
+                ),
+                Host::IP(IpAddr::V6(Ipv6Addr::LOCALHOST), 1234, None),
+            ])
+        );
+        assert_eq!(
+            parse_hostlist(&["[2001:db8::1234%eth0]"], &[1234]),
+            Ok(vec![Host::IP(
+                IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1234)),
+                1234,
+                Some("eth0".to_string())
+            ),])
+        );
     }
 
     #[test]
     fn test_parse_dsn() {
-        assert_eq!(parse_postgres_url("postgres://", [
-            ("PGUSER", "user"),
-            ("PGDATABASE", "testdb"),
-            ("PGPASSWORD", "passw"),
-            ("PGHOST", "host"),
-            ("PGPORT", "123"),
-            ("PGCONNECT_TIMEOUT", "8"),
-        ].as_slice()).unwrap(), ConnectionParameters {
-            hosts: vec![
-                Host::Hostname(
-                    "host".to_string(),
-                    123,
-                ),
-            ],
-            database: "testdb".to_string(),
-            user: "user".to_string(),
-            password: Password::Specified(
-                "passw".to_string(),
-            ),
-            connect_timeout: Some(Duration::from_secs(8)),
-            ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
-            ..Default::default()
-        });
+        assert_eq!(
+            parse_postgres_url(
+                "postgres://",
+                [
+                    ("PGUSER", "user"),
+                    ("PGDATABASE", "testdb"),
+                    ("PGPASSWORD", "passw"),
+                    ("PGHOST", "host"),
+                    ("PGPORT", "123"),
+                    ("PGCONNECT_TIMEOUT", "8"),
+                ]
+                .as_slice()
+            )
+            .unwrap(),
+            ConnectionParameters {
+                hosts: vec![Host::Hostname("host".to_string(), 123,),],
+                database: "testdb".to_string(),
+                user: "user".to_string(),
+                password: Password::Specified("passw".to_string(),),
+                connect_timeout: Some(Duration::from_secs(8)),
+                ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
+                ..Default::default()
+            }
+        );
 
-        assert_eq!(parse_postgres_url("postgres://user:pass@host:1234/database", ()).unwrap(), ConnectionParameters {
-            hosts: vec![
-                Host::Hostname(
-                    "host".to_string(),
-                    1234,
-                ),
-            ],
-            database: "database".to_string(),
-            user: "user".to_string(),
-            password: Password::Specified(
-                "pass".to_string(),
-            ),
-            ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
-            ..Default::default()
-        });
+        assert_eq!(
+            parse_postgres_url("postgres://user:pass@host:1234/database", ()).unwrap(),
+            ConnectionParameters {
+                hosts: vec![Host::Hostname("host".to_string(), 1234,),],
+                database: "database".to_string(),
+                user: "user".to_string(),
+                password: Password::Specified("pass".to_string(),),
+                ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
+                ..Default::default()
+            }
+        );
 
-        assert_eq!(parse_postgres_url("postgresql://user@host1:1111,host2:2222/db", ()).unwrap(), ConnectionParameters {
-            hosts: vec![
-                Host::Hostname(
-                    "host1".to_string(),
-                    1111,
-                ),
-                Host::Hostname(
-                    "host2".to_string(),
-                    2222,
-                ),
-            ],
-            database: "db".to_string(),
-            user: "user".to_string(),
-            password: Password::Unspecified,
-            ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
-            ..Default::default()
-        });
+        assert_eq!(
+            parse_postgres_url("postgresql://user@host1:1111,host2:2222/db", ()).unwrap(),
+            ConnectionParameters {
+                hosts: vec![
+                    Host::Hostname("host1".to_string(), 1111,),
+                    Host::Hostname("host2".to_string(), 2222,),
+                ],
+                database: "db".to_string(),
+                user: "user".to_string(),
+                password: Password::Unspecified,
+                ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_dsn_with_slashes() {
+        assert_eq!(
+            parse_postgres_url(
+                r#"postgres://test\\@fgh/test\:db?passfile=/tmp/tmpkrjuaje4"#,
+                ()
+            )
+            .unwrap(),
+            ConnectionParameters {
+                hosts: vec![Host::Hostname("fgh".to_string(), 5432,),],
+                database: r#"test\:db"#.to_string(),
+                user: r#"test\\"#.to_string(),
+                password: Password::Passfile("/tmp/tmpkrjuaje4".to_string(),),
+                ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_dns_with_params() {
+        assert_eq!(parse_postgres_url("postgresql://me:ask@127.0.0.1:888/db?param=sss&param=123&host=testhost&user=testuser&port=2222&database=testdb&sslmode=verify_full&aa=bb", ()).unwrap(), ConnectionParameters {
+                hosts: vec![
+                        Host::IP(
+                            IpAddr::V4(Ipv4Addr::LOCALHOST),
+                            888,
+                            None,
+                        ),
+                    ],
+                    database: "db".to_string(),
+                    user: "me".to_string(),
+                    password: Password::Specified(
+                        "ask".to_string(),
+                    ),
+                    server_settings: HashMap::from_iter([
+                        ("aa".to_string(), "bb".to_string()),
+                        ("param".to_string(), "123".to_string())
+                    ]),
+                    ssl: Ssl::Enable(SslMode::VerifyFull, Default::default()),
+                    ..Default::default()
+        })
+    }
+
+    #[test]
+    fn test_dsn_with_escapes() {
+        assert_eq!(
+            parse_postgres_url("postgresql://us%40r:p%40ss@h%40st1,h%40st2:543%33/d%62", ())
+                .unwrap(),
+            ConnectionParameters {
+                hosts: vec![
+                    Host::Hostname("h@st1".to_string(), 5432,),
+                    Host::Hostname("h@st2".to_string(), 5433,),
+                ],
+                database: "db".to_string(),
+                user: "us@r".to_string(),
+                password: Password::Specified("p@ss".to_string(),),
+                ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_dsn_no_slash() {
+        assert_eq!(
+            parse_postgres_url("postgres://user@?port=56226&host=%2Ftmp", ()).unwrap(),
+            ConnectionParameters {
+                hosts: vec![Host::Path("/tmp".to_string(),)],
+                database: "user".to_string(),
+                user: "user".to_string(),
+                password: Password::Unspecified,
+                ssl: Ssl::Disable,
+                ..Default::default()
+            }
+        );
     }
 }

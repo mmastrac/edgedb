@@ -15,21 +15,18 @@
 
 
 from __future__ import annotations
-from typing import Optional, Tuple, Union, Collection, Dict, List, cast
+from typing import Optional, Tuple, Union, Dict, List
 
 import dataclasses
 import enum
 import getpass
-import os
 import pathlib
 import platform
 import re
 import ssl as ssl_module
 import stat
-import sys
-import urllib.parse
 import warnings
-
+from . import _pg_rust
 
 class SSLMode(enum.IntEnum):
     disable = 0
@@ -68,7 +65,7 @@ if _system == 'Windows':
     CSIDL_APPDATA = 0x001a
     PGPASSFILE = 'pgpass.conf'
 
-    def get_pg_home_directory() -> Optional[pathlib.Path]:
+    def get_pg_home_directory() -> pathlib.Path:
         # We cannot simply use expanduser() as that returns the user's
         # home directory, whereas Postgres stores its config in
         # %AppData% on Windows.
@@ -76,14 +73,14 @@ if _system == 'Windows':
         r = ctypes.windll.shell32.SHGetFolderPathW(  # type: ignore
             0, CSIDL_APPDATA, 0, 0, buf)
         if r:
-            return None
+            return pathlib.Path.home()
         else:
             return pathlib.Path(buf.value) / 'postgresql'
 else:
     PGPASSFILE = '.pgpass'
 
-    def get_pg_home_directory() -> Optional[pathlib.Path]:
-        return pathlib.Path.home()
+    def get_pg_home_directory() -> pathlib.Path:
+        return pathlib.Path.home() / '.postgresql'
 
 
 def _read_password_file(passfile: pathlib.Path) -> List[Tuple[str, ...]]:
@@ -134,8 +131,7 @@ def _read_password_file(passfile: pathlib.Path) -> List[Tuple[str, ...]]:
 def _read_password_from_pgpass(
     *,
     passfile: Optional[pathlib.Path],
-    hosts: List[str],
-    ports: List[int],
+    addrs: List[Tuple[str, int]],
     database: str,
     user: str,
 ) -> Optional[str]:
@@ -150,7 +146,7 @@ def _read_password_from_pgpass(
         if not passtab:
             return None
 
-    for host, port in zip(hosts, ports):
+    for host, port in addrs:
         if host.startswith('/'):
             # Unix sockets get normalized into 'localhost'
             host = 'localhost'
@@ -169,92 +165,6 @@ def _read_password_from_pgpass(
             return ppassword
 
     return None
-
-
-def _validate_port_spec(
-    hosts: Collection[str],
-    port: Union[int, List[int]],
-) -> List[int]:
-    if isinstance(port, list):
-        # If there is a list of ports, its length must
-        # match that of the host list.
-        if len(port) != len(hosts):
-            raise ValueError(
-                'could not match {} port numbers to {} hosts'.format(
-                    len(port), len(hosts)))
-    else:
-        port = [port for _ in range(len(hosts))]
-
-    return port
-
-
-def _parse_hostlist(
-    hostlist: str,
-    port: Union[int, List[int]],
-    *,
-    unquote: bool = False,
-) -> Tuple[List[str], List[int]]:
-    if ',' in hostlist:
-        # A comma-separated list of host addresses.
-        hostspecs = hostlist.split(',')
-    else:
-        hostspecs = [hostlist]
-
-    hosts = []
-    hostlist_ports = []
-    result_port: List[int] = []
-
-    if not port:
-        portspec = os.environ.get('PGPORT')
-        specified_port: Union[int, List[int]]
-        if portspec:
-            if ',' in portspec:
-                specified_port = [int(p) for p in portspec.split(',')]
-            else:
-                specified_port = int(portspec)
-        else:
-            specified_port = 5432
-
-        default_port = _validate_port_spec(hostspecs, specified_port)
-
-    else:
-        result_port = _validate_port_spec(hostspecs, port)
-
-    for i, hostspec in enumerate(hostspecs):
-        if hostspec[0] == '/':
-            # Unix socket
-            addr = hostspec
-            hostspec_port = ''
-        elif hostspec[0] == '[':
-            # IPv6 address
-            m = re.match(r'(?:\[([^\]]+)\])(?::([0-9]+))?', hostspec)
-            if m:
-                addr = m.group(1)
-                hostspec_port = m.group(2)
-            else:
-                raise ValueError(
-                    f'invalid IPv6 address in the connection URI: {hostspec!r}'
-                )
-        else:
-            # IPv4 address
-            addr, _, hostspec_port = hostspec.partition(':')
-
-        if unquote:
-            addr = urllib.parse.unquote(addr)
-
-        hosts.append(addr)
-        if not port:
-            if hostspec_port:
-                if unquote:
-                    hostspec_port = urllib.parse.unquote(hostspec_port)
-                hostlist_ports.append(int(hostspec_port))
-            else:
-                hostlist_ports.append(default_port[i])
-
-    if not result_port:
-        result_port = hostlist_ports
-
-    return hosts, result_port
 
 
 def _parse_tls_version(tls_version: str) -> ssl_module.TLSVersion:
@@ -280,364 +190,86 @@ def parse_dsn(
     Tuple[Tuple[str, int], ...],
     ConnectionParameters,
 ]:
-    # `auth_hosts` is the version of host information for the purposes
-    # of reading the pgpass file.
-    auth_hosts = None
-    host: List[str] = []
-    port: Union[int, List[int]] = []
-    user = None
-    password = None
-    passfile = None
-    database = None
-    sslmode_str = None
-    sslcert = None
-    sslkey = None
-    sslpassword = None
-    sslrootcert = None
-    sslcrl = None
-    ssl_min_protocol_version = None
-    ssl_max_protocol_version = None
-    server_settings: Dict[str, str] = {}
-    connect_timeout: Optional[int] = None
+    try:
+        parsed, ssl_paths = _pg_rust.parse_dsn(getpass.getuser(),
+                                               str(get_pg_home_directory()),
+                                               dsn)
+    except Exception as e:
+        raise ValueError(f"{e.args[0]}") from e
 
-    parsed = urllib.parse.urlparse(dsn)
-
-    if parsed.scheme not in {'postgresql', 'postgres'}:
-        raise ValueError(
-            'invalid DSN: scheme is expected to be either '
-            '"postgresql" or "postgres", got {!r}'.format(parsed.scheme))
-
-    if parsed.netloc:
-        if '@' in parsed.netloc:
-            dsn_auth, _, dsn_hostspec = parsed.netloc.partition('@')
+    ssl = None
+    sslmode = SSLMode.disable
+    ssl_config = parsed['ssl']
+    if 'Enable' in ssl_config:
+        ssl_config = ssl_config['Enable']
+        ssl = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_CLIENT)
+        sslmode = SSLMode.parse(ssl_config[0].lower())
+        ssl.check_hostname = sslmode >= SSLMode.verify_full
+        ssl_config = ssl_config[1]
+        if sslmode < SSLMode.require:
+            ssl.verify_mode = ssl_module.CERT_NONE
         else:
-            dsn_hostspec = parsed.netloc
-            dsn_auth = ''
-    else:
-        dsn_auth = dsn_hostspec = ''
-
-    if dsn_auth:
-        dsn_user, _, dsn_password = dsn_auth.partition(':')
-    else:
-        dsn_user = dsn_password = ''
-
-    if dsn_hostspec:
-        host, port = _parse_hostlist(dsn_hostspec, [], unquote=True)
-
-    if parsed.path:
-        dsn_database = parsed.path
-        if dsn_database.startswith('/'):
-            dsn_database = dsn_database[1:]
-        database = urllib.parse.unquote(dsn_database)
-
-    if dsn_user:
-        user = urllib.parse.unquote(dsn_user)
-
-    if dsn_password:
-        password = urllib.parse.unquote(dsn_password)
-
-    if parsed.query:
-        query: Dict[str, str] = {}
-        pq = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
-        for k, v in pq.items():
-            if isinstance(v, list):
-                query[k] = v[-1]
+            if ssl_paths['rootcert']:
+                ssl.load_verify_locations(ssl_paths['rootcert'])
+                ssl.verify_mode = ssl_module.CERT_REQUIRED
             else:
-                query[k] = cast(str, v)
-
-        if 'port' in query:
-            val = query.pop('port')
-            if not port and val:
-                port = [int(p) for p in val.split(',')]
-
-        if 'host' in query:
-            val = query.pop('host')
-            if not host and val:
-                host, port = _parse_hostlist(val, port)
-
-        if 'dbname' in query:
-            val = query.pop('dbname')
-            if database is None:
-                database = val
-
-        if 'database' in query:
-            val = query.pop('database')
-            if database is None:
-                database = val
-
-        if 'user' in query:
-            val = query.pop('user')
-            if user is None:
-                user = val
-
-        if 'password' in query:
-            val = query.pop('password')
-            if password is None:
-                password = val
-
-        if 'passfile' in query:
-            passfile = query.pop('passfile')
-
-        if 'sslmode' in query:
-            sslmode_str = query.pop('sslmode')
-
-        if 'sslcert' in query:
-            sslcert = query.pop('sslcert')
-
-        if 'sslkey' in query:
-            sslkey = query.pop('sslkey')
-
-        if 'sslpassword' in query:
-            sslpassword = query.pop('sslpassword')
-
-        if 'sslrootcert' in query:
-            sslrootcert = query.pop('sslrootcert')
-
-        if 'sslcrl' in query:
-            sslcrl = query.pop('sslcrl')
-
-        if 'ssl_min_protocol_version' in query:
-            ssl_min_protocol_version = query.pop('ssl_min_protocol_version')
-
-        if 'ssl_max_protocol_version' in query:
-            ssl_max_protocol_version = query.pop('ssl_max_protocol_version')
-
-        if 'connect_timeout' in query:
-            connect_timeout = int(query.pop('connect_timeout'))
-
-        if query:
-            server_settings = query
-
-    if not host:
-        hostspec = os.environ.get('PGHOST')
-        if hostspec:
-            host, port = _parse_hostlist(hostspec, port)
-
-    if not host:
-        auth_hosts = ['localhost']
-
-        if _system == 'Windows':
-            host = ['localhost']
-        else:
-            host = ['/run/postgresql', '/var/run/postgresql',
-                    '/tmp', '/private/tmp', 'localhost']
-
-    if auth_hosts is None:
-        auth_hosts = host
-
-    if not port:
-        portspec = os.environ.get('PGPORT')
-        if portspec:
-            if ',' in portspec:
-                port = [int(p) for p in portspec.split(',')]
-            else:
-                port = int(portspec)
-        else:
-            port = 5432
-
-    elif isinstance(port, (list, tuple)):
-        port = [int(p) for p in port]
-
-    else:
-        port = int(port)
-
-    port = _validate_port_spec(host, port)
-
-    if user is None:
-        user = os.getenv('PGUSER')
-        if not user:
-            user = getpass.getuser()
-
-    if password is None:
-        password = os.getenv('PGPASSWORD')
-
-    if database is None:
-        database = os.getenv('PGDATABASE')
-
-    if database is None:
-        database = user
-
-    if user is None:
-        raise ValueError(
-            'could not determine user name to connect with')
-
-    if database is None:
-        raise ValueError(
-            'could not determine database name to connect to')
-
-    if password is None:
-        if passfile is None:
-            passfile = os.getenv('PGPASSFILE')
-
-        if passfile is None:
-            homedir = get_pg_home_directory()
-            if not homedir:
-                passfile_path = None
-            else:
-                passfile_path = homedir / PGPASSFILE
-        else:
-            passfile_path = pathlib.Path(passfile)
-
-        if passfile_path is not None:
-            password = _read_password_from_pgpass(
-                hosts=auth_hosts, ports=port,
-                database=database, user=user,
-                passfile=passfile_path)
-
-    if connect_timeout is None:
-        env_val = os.getenv('PGCONNECT_TIMEOUT')
-        if env_val:
-            connect_timeout = int(env_val)
-
-    if connect_timeout is not None:
-        # Match the same behavior of libpq
-        # https://www.postgresql.org/docs/current/libpq-connect.html
-        if connect_timeout <= 0:
-            connect_timeout = None
-        elif connect_timeout < 2:
-            connect_timeout = 2
-
+                if sslmode == SSLMode.require:
+                    ssl.verify_mode = ssl_module.CERT_NONE
+            if ssl_paths['crl']:
+                ssl.load_verify_locations(ssl_paths['crl'])
+                ssl.verify_flags |= ssl_module.VERIFY_CRL_CHECK_CHAIN
+        if ssl_paths['key'] and ssl_paths['cert']:
+            ssl.load_cert_chain(ssl_paths['cert'],
+                                ssl_paths['key'],
+                                ssl_config['password'] or '')
+        if ssl_config['max_protocol_version']:
+            ssl.maximum_version = _parse_tls_version(
+                ssl_config['max_protocol_version'])
+        if ssl_config['min_protocol_version']:
+            ssl.minimum_version = _parse_tls_version(
+                ssl_config['min_protocol_version'])
     addrs: List[Tuple[str, int]] = []
-    have_tcp_addrs = False
-    for h, p in zip(host, port):
-        addrs.append((h, p))
-        if not h.startswith('/'):
-            have_tcp_addrs = True
+    for host in parsed['hosts']:
+        if 'Hostname' in host:
+            host, port = host['Hostname']
+            addrs.append((host, port))
+        if 'IP' in host:
+            hostname = host['IP'][0]
+            # Reconstruct the scope ID
+            if host['IP'][2]:
+                hostname = f'{hostname}%{host['IP'][2]}'
+            addrs.append((hostname, host['IP'][1]))
+        elif 'Path' in host:
+            path = host['Path']
+            addrs.append((path, 5432))
 
-    if not addrs:
-        raise ValueError(
-            'could not determine the database address to connect to')
+    passfile: pathlib.Path | None = None
+    password: str | None = ""
+    password_config = parsed['password']
+    if 'Unspecified' in password_config:
+        passfile = get_pg_home_directory() / 'pgpass.conf'
+    elif 'Passfile' in password_config:
+        passfile = pathlib.Path(password_config['Passfile'])
+    elif 'Specified' in password_config:
+        password = password_config['Specified']
 
-    if sslmode_str is None:
-        sslmode_str = os.getenv('PGSSLMODE')
+    database: str = str(parsed['database']) or ''
+    user: str = str(parsed['user']) or ''
+    if passfile:
+        password = _read_password_from_pgpass(passfile=passfile,
+                                              addrs=addrs,
+                                              database=database,
+                                              user=user)
 
-    if sslmode_str is None and have_tcp_addrs:
-        sslmode_str = 'prefer'
-
-    if sslmode_str:
-        try:
-            sslmode = SSLMode.parse(sslmode_str)
-        except AttributeError:
-            modes = ', '.join(m.name.replace('_', '-') for m in SSLMode)
-            raise ValueError(
-                '`sslmode` parameter must be one of: {}'.format(modes))
-
-        # docs at https://www.postgresql.org/docs/10/static/libpq-connect.html
-        if sslmode < SSLMode.allow:
-            ssl = None
-        else:
-            ssl = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_CLIENT)
-            ssl.check_hostname = sslmode >= SSLMode.verify_full
-            if sslmode < SSLMode.require:
-                ssl.verify_mode = ssl_module.CERT_NONE
-            else:
-                if sslrootcert is None:
-                    sslrootcert = os.getenv('PGSSLROOTCERT')
-                if sslrootcert:
-                    ssl.load_verify_locations(cafile=sslrootcert)
-                    ssl.verify_mode = ssl_module.CERT_REQUIRED
-                else:
-                    sslrootcert = _dot_postgresql_path('root.crt')
-                    try:
-                        ssl.load_verify_locations(cafile=sslrootcert)
-                    except FileNotFoundError:
-                        if sslmode > SSLMode.require:
-                            raise ValueError(
-                                f'root certificate file "{sslrootcert}" does '
-                                f'not exist\nEither provide the file or '
-                                f'change sslmode to disable server '
-                                f'certificate verification.'
-                            )
-                        else:
-                            # sslmode=require without sslrootcert won't verify
-                            # the server certificate
-                            ssl.verify_mode = ssl_module.CERT_NONE
-                    else:
-                        ssl.verify_mode = ssl_module.CERT_REQUIRED
-
-                if sslcrl is None:
-                    sslcrl = os.getenv('PGSSLCRL')
-                if sslcrl:
-                    ssl.load_verify_locations(cafile=sslcrl)
-                    ssl.verify_flags |= ssl_module.VERIFY_CRL_CHECK_CHAIN
-                else:
-                    sslcrl = _dot_postgresql_path('root.crl')
-                    try:
-                        ssl.load_verify_locations(cafile=sslcrl)
-                    except FileNotFoundError:
-                        pass
-                    else:
-                        ssl.verify_flags |= ssl_module.VERIFY_CRL_CHECK_CHAIN
-
-            if sslkey is None:
-                sslkey = os.getenv('PGSSLKEY')
-            if not sslkey:
-                sslkey = _dot_postgresql_path('postgresql.key')
-                if not os.path.exists(sslkey):
-                    sslkey = None
-            if sslcert is None:
-                sslcert = os.getenv('PGSSLCERT')
-            if sslcert:
-                ssl.load_cert_chain(
-                    sslcert, keyfile=sslkey, password=lambda: sslpassword or ''
-                )
-            else:
-                sslcert = _dot_postgresql_path('postgresql.crt')
-                try:
-                    ssl.load_cert_chain(
-                        sslcert,
-                        keyfile=sslkey,
-                        password=lambda: sslpassword or '',
-                    )
-                except FileNotFoundError:
-                    pass
-
-            # OpenSSL 1.1.1 keylog file
-            if hasattr(ssl, 'keylog_filename'):
-                keylogfile = os.environ.get('SSLKEYLOGFILE')
-                if keylogfile and not sys.flags.ignore_environment:
-                    setattr(ssl, 'keylog_filename', keylogfile)  # noqa
-
-            if ssl_min_protocol_version is None:
-                ssl_min_protocol_version = os.getenv('PGSSLMINPROTOCOLVERSION')
-            if ssl_min_protocol_version:
-                ssl.minimum_version = _parse_tls_version(
-                    ssl_min_protocol_version
-                )
-            else:
-                ssl.minimum_version = ssl_module.TLSVersion.TLSv1_2
-
-            if ssl_max_protocol_version is None:
-                ssl_max_protocol_version = os.getenv('PGSSLMAXPROTOCOLVERSION')
-            if ssl_max_protocol_version:
-                ssl.maximum_version = _parse_tls_version(
-                    ssl_max_protocol_version
-                )
-
-    else:
-        ssl = None
-        sslmode = SSLMode.disable
-
-    if ssl and not have_tcp_addrs:
-        raise ValueError(
-            '`ssl` parameter can only be enabled for TCP addresses, '
-            'got a UNIX socket paths: {!r}'.format(addrs))
-
-    if server_settings is not None and (
-            not isinstance(server_settings, dict) or
-            not all(isinstance(k, str) for k in server_settings) or
-            not all(isinstance(v, str) for v in server_settings.values())):
-        raise ValueError(
-            'server_settings is expected to be None or '
-            'a Dict[str, str]')
-
+    connect_timeout = parsed['connect_timeout']['secs'] \
+        if parsed['connect_timeout'] else None
     params = ConnectionParameters(
         user=user,
         password=password,
         database=database,
         ssl=ssl,
         sslmode=sslmode,
-        server_settings=server_settings,
+        server_settings=parsed['server_settings'],
         connect_timeout=connect_timeout,
     )
 

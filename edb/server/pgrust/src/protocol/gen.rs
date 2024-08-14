@@ -237,7 +237,7 @@ macro_rules! protocol2_builder {
 
             $( #[$sdoc] )?
             #[doc = concat!("\n\nAvailable fields: \n\n" $(
-                , " - [`", stringify!($field), "`](Self::", stringify!($field), "()): ", $fdoc, 
+                , " - [`", stringify!($field), "`](Self::", stringify!($field), "()): ", $fdoc,
                 $( "  (value = `", stringify!($value), "`)", )?
                 "\n\n"
             )* )]
@@ -419,7 +419,7 @@ macro_rules! protocol2_builder {
                     // fields, we need to do a * repeat, then a ? repeat and
                     // somehow use $variable_marker in the remainder of the
                     // pattern.
-                    $($(  
+                    $($(
                         #[doc = $fdoc]
                         pub $field: r#if!(__has__ [$variable_marker] {<$type as $crate::protocol::Enliven<'a>>::ForMeasure}),
                     )?)*
@@ -607,11 +607,11 @@ mod tests {
             docs(),
             fields({
                 name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
-                docs(), fixed(fixed_offset = fixed_offset),
+                docs(concat! ()), fixed(fixed_offset = fixed_offset),
             },
             {
                 name(b), type (u8), size(fixed = fixed), value(no_value = no_value),
-                docs(), fixed(fixed_offset = fixed_offset),
+                docs(concat! ()), fixed(fixed_offset = fixed_offset),
             },),
         }));
     }
@@ -630,29 +630,29 @@ mod tests {
             docs(),
             fields({
                 name(a), type (u8), size(fixed = fixed), value(no_value = no_value),
-                docs(), fixed(fixed_offset = fixed_offset),
+                docs(concat! ()), fixed(fixed_offset = fixed_offset),
             },
             {
                 name(l), type (crate::protocol::meta::Length), size(fixed = fixed),
-                value(auto = auto), docs(), fixed(fixed_offset = fixed_offset),
+                value(auto = auto), docs(concat! ()), fixed(fixed_offset = fixed_offset),
             },
             {
                 name(s), type (ZTString), size(variable = variable),
-                value(no_value = no_value), docs(),
+                value(no_value = no_value), docs(concat! ()),
                 fixed(fixed_offset = fixed_offset),
             },
             {
                 name(c), type (i16), size(fixed = fixed), value(no_value = no_value),
-                docs(), fixed(no_fixed_offset = no_fixed_offset),
+                docs(concat! ()), fixed(no_fixed_offset = no_fixed_offset),
             },
             {
                 name(d), type ([u8; 4]), size(fixed = fixed),
-                value(no_value = no_value), docs(),
+                value(no_value = no_value), docs(concat! ()),
                 fixed(no_fixed_offset = no_fixed_offset),
             },
             {
                 name(e), type (ZTArray<ZTString>), size(variable = variable),
-                value(no_value = no_value), docs(),
+                value(no_value = no_value), docs(concat! ()),
                 fixed(no_fixed_offset = no_fixed_offset),
             },
         ),

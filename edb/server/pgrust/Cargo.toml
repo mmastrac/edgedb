@@ -9,7 +9,7 @@ edition = "2021"
 workspace = true
 
 [features]
-python_extension = ["pyo3/extension-module"]
+python_extension = ["pyo3/extension-module", "pyo3/serde"]
 optimizer = []
 
 [dependencies]
@@ -33,6 +33,10 @@ sha2 = "0.10"
 rand = "0"
 hexdump = "0"
 url = "2"
+serde = "1"
+serde_derive = "1"
+serde-pickle = "1"
+percent-encoding = "2"
 
 [dependencies.tokio]
 version = "1"
