@@ -226,6 +226,10 @@ def parse_dsn(
         if ssl_config['min_protocol_version']:
             ssl.minimum_version = _parse_tls_version(
                 ssl_config['min_protocol_version'])
+        # OpenSSL 1.1.1 keylog file
+        if hasattr(ssl, 'keylog_filename'):
+            if ssl_config['keylog_filename']:
+                ssl.keylog_filename = ssl_config['keylog_filename']
 
     # Extract hosts from the dict
     addrs: List[Tuple[str, int]] = []
