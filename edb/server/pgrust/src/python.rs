@@ -39,7 +39,7 @@ fn parse_dsn(py: Python, username: String, home_dir: String, s: String) -> PyRes
 }
 
 #[pymodule]
-fn _pg_rust(py: Python, m: &PyModule) -> PyResult<()> {
+fn _pg_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_dsn, m)?)?;
     Ok(())
 }

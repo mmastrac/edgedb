@@ -4,7 +4,10 @@ macro_rules! message_group {
         $(#[$doc])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum $group {
-            $($message),*
+            $(
+                #[doc = concat!("Matched [`", stringify!($message), "`]")]
+                $message
+            ),*
         }
 
         pub trait [<$group Match>] {

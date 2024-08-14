@@ -35,20 +35,19 @@ pub use datatypes::{Encoded, Rest, ZTString};
 pub use definition::data::*;
 pub use message_group::match_message;
 
+/// For a given metaclass, returns the inflated type, a measurement type and a
+/// builder type.
 pub trait Enliven<'a> {
     type WithLifetime;
     type ForMeasure;
     type ForBuilder;
 }
 
-/// Delegates to a concrete `FieldAccess` but as a non-const trait.
+/// Delegates to a concrete [`FieldAccess`] but as a non-const trait. This is
+/// used for performing extraction in iterators.
 pub(crate) trait FieldAccessNonConst<'a, T: 'a> {
     fn size_of_field_at(buf: &[u8]) -> usize;
     fn extract(buf: &'a [u8]) -> T;
-}
-
-pub trait FieldTypes {
-    type FieldTypes;
 }
 
 /// This struct is specialized for each type we want to extract data from. We
@@ -57,7 +56,7 @@ pub(crate) struct FieldAccess<T: for<'a> Enliven<'a>> {
     _phantom_data: std::marker::PhantomData<T>,
 }
 
-/// Delegate to the concrete `FieldAccess` for each type we want to extract.
+/// Delegate to the concrete [`FieldAccess`] for each type we want to extract.
 macro_rules! field_access {
     ($ty:ty) => {
         impl<'a>
@@ -82,7 +81,7 @@ pub(crate) use field_access;
 #[cfg(test)]
 mod tests {
     use definition::builder;
-
+    use messages::Backend;
     use super::*;
 
     #[test]
