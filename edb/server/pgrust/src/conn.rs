@@ -1,10 +1,10 @@
 use crate::{
     auth::{self, generate_salted_password, ClientEnvironment, ClientTransaction, Sha256Out},
     protocol::{
-        builder, match_message, messages, AuthenticationMessage, AuthenticationOk,
-        AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, Backend,
-        BackendKeyData, CommandComplete, DataRow, ErrorResponse, Message, ParameterStatus,
-        ReadyForQuery, RowDescription,
+        builder, match_message, messages::Backend, AuthenticationMessage, AuthenticationOk,
+        AuthenticationSASL, AuthenticationSASLContinue, AuthenticationSASLFinal, BackendKeyData,
+        CommandComplete, DataRow, ErrorResponse, Message, ParameterStatus, ReadyForQuery,
+        RowDescription,
     },
 };
 use base64::Engine;

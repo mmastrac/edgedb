@@ -243,6 +243,12 @@ def parse_dsn(
             path = host['Path']
             addrs.append((path, 0))
 
+    # Database/user/password/connect_timeout
+    database: str = str(parsed['database']) or ''
+    user: str = str(parsed['user']) or ''
+    connect_timeout = parsed['connect_timeout']['secs'] \
+        if parsed['connect_timeout'] else None
+
     # Extract password from the dict
     passfile: pathlib.Path | None = None
     password: str | None = ""
@@ -253,17 +259,11 @@ def parse_dsn(
         passfile = pathlib.Path(password_config['Passfile'])
     elif 'Specified' in password_config:
         password = password_config['Specified']
-
-    # Database/user/password/connect_timeout
-    database: str = str(parsed['database']) or ''
-    user: str = str(parsed['user']) or ''
     if passfile:
         password = _read_password_from_pgpass(passfile=passfile,
                                               addrs=addrs,
                                               database=database,
                                               user=user)
-    connect_timeout = parsed['connect_timeout']['secs'] \
-        if parsed['connect_timeout'] else None
 
     params = ConnectionParameters(
         user=user,

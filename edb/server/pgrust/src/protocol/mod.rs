@@ -1,34 +1,30 @@
-// TODO
-
-// Maybe they can also have the "measurement" / creation types too
-// Finish tuplenest/tupleunest
-// Create filtering for nested tuples to remove the fixed size stuff for measurement
-// Maybe it can also remove the fixed-value itsems as well for creation
-
 mod arrays;
 mod datatypes;
-mod definition;
+pub(crate) mod definition;
 mod gen;
 mod message_group;
 mod writer;
 
-/// Metatypes
+/// Metatypes for the protocol and related arrays/strings.
 pub mod meta {
     pub use super::arrays::meta::*;
     pub use super::datatypes::meta::*;
     pub use super::definition::meta::*;
 }
 
+/// Measurement structs.
 pub mod measure {
     pub use super::definition::measure::*;
 }
 
+/// Builder structs.
 pub mod builder {
     pub use super::definition::builder::*;
 }
 
+/// Message types collections.
 pub mod messages {
-    pub use super::definition::Backend;
+    pub use super::definition::{Backend, Frontend};
 }
 
 #[allow(unused)]
@@ -37,7 +33,6 @@ pub use arrays::{Array, ArrayIter, ZTArray, ZTArrayIter};
 pub use datatypes::{Encoded, Rest, ZTString};
 #[allow(unused)]
 pub use definition::data::*;
-pub use definition::{Backend, Frontend};
 pub use message_group::match_message;
 
 pub trait Enliven<'a> {

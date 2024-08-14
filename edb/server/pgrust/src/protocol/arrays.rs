@@ -13,6 +13,7 @@ pub struct ZTArray<'a, T: FieldAccessNonConst<'a, T> + 'a> {
     buf: &'a [u8],
 }
 
+/// Metaclass for [`ZTArray`].
 pub struct ZTArrayMeta<T> {
     _phantom: PhantomData<T>,
 }
@@ -38,6 +39,7 @@ impl<'a, T: FieldAccessNonConst<'a, T> + 'a> ZTArray<'a, T> {
     }
 }
 
+/// [`ZTArray`] [`Iterator`] for values of type `T`.
 pub struct ZTArrayIter<'a, T: FieldAccessNonConst<'a, T> + 'a> {
     _phantom: PhantomData<T>,
     buf: &'a [u8],
@@ -84,6 +86,7 @@ pub struct Array<'a, L: 'static, T: FieldAccessNonConst<'a, T> + 'a> {
     len: u32,
 }
 
+/// Metaclass for [`Array`].
 pub struct ArrayMeta<L, T> {
     _phantom: PhantomData<(L, T)>,
 }
@@ -121,6 +124,7 @@ impl<'a, L, T: FieldAccessNonConst<'a, T> + 'a> Array<'a, L, T> {
     }
 }
 
+/// [`Array`] [`Iterator`] for values of type `T`.
 pub struct ArrayIter<'a, T: FieldAccessNonConst<'a, T> + 'a> {
     _phantom: PhantomData<T>,
     buf: &'a [u8],
@@ -265,6 +269,7 @@ macro_rules! array_access {
 }
 pub(crate) use array_access;
 
+// Arrays of type [`u8`] are special-cased to return a slice of bytes.
 impl<T> AsRef<[u8]> for Array<'_, T, u8> {
     fn as_ref(&self) -> &[u8] {
         &self.buf[..self.len as _]
