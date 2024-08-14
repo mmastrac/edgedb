@@ -80,9 +80,9 @@ pub(crate) use field_access;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use definition::builder;
     use messages::Backend;
-    use super::*;
 
     #[test]
     fn test_sasl_response() {

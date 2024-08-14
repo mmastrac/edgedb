@@ -89,6 +89,7 @@ struct Credentials {
 }
 
 struct QueryWaiter {
+    #[allow(unused)]
     tx: tokio::sync::mpsc::UnboundedSender<()>,
 }
 

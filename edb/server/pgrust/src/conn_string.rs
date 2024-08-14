@@ -12,6 +12,7 @@ use thiserror::Error;
 use url::Url;
 
 #[derive(Error, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum ParseError {
     #[error(
         "Invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\", got {0}"
@@ -69,6 +70,7 @@ pub struct ConnectionParameters {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum Ssl {
     #[default]
     Disable,
@@ -166,11 +168,7 @@ where
     V: std::borrow::Borrow<str>,
 {
     fn read(&self, name: &'static str) -> Option<Cow<str>> {
-        if let Some(value) = self.get(name) {
-            Some(value.borrow().into())
-        } else {
-            None
-        }
+        self.get(name).map(|value| value.borrow().into())
     }
 }
 
@@ -267,8 +265,8 @@ fn parse_hostlist(
             let addr = Ipv6Addr::from_str(ipv6_part)
                 .map_err(|_| ParseError::InvalidHostname(hostspec.to_string()))?;
 
-            let port = if port_part.starts_with(':') {
-                parse_port(&port_part[1..])?
+            let port = if let Some(stripped) = port_part.strip_prefix(':') {
+                parse_port(stripped)?
             } else {
                 port
             };
@@ -333,7 +331,7 @@ pub fn parse_postgres_url(
     let mut user: Option<Cow<str>> = match url.username() {
         "" => None,
         user => {
-            let decoded = percent_decode_str(&user);
+            let decoded = percent_decode_str(user);
             if let Ok(user) = decoded.decode_utf8() {
                 Some(user)
             } else {

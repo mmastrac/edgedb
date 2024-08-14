@@ -227,7 +227,7 @@ macro_rules! protocol2_builder {
             /// Our struct we are building.
             type S<'a> = $name<'a>;
             /// The meta-struct for the struct we are building.
-            type META = [<$name Meta>];
+            type Meta = [<$name Meta>];
             /// The measurement struct (used for `measure`).
             type M<'a> = [<$name Measure>]<'a>;
             /// The builder struct (used for `to_vec` and other build operations)
@@ -247,7 +247,7 @@ macro_rules! protocol2_builder {
                 __buf: &'a [u8],
                 /// The calculated field offsets.
                 #[doc(hidden)]
-                __field_offsets: [usize; META::FIELD_COUNT + 1]
+                __field_offsets: [usize; Meta::FIELD_COUNT + 1]
             }
 
             impl PartialEq for $name<'_> {
@@ -286,7 +286,7 @@ macro_rules! protocol2_builder {
                 /// Creates a new instance of this struct from a given buffer.
                 #[inline]
                 pub const fn new(mut buf: &'a [u8]) -> Self {
-                    let mut __field_offsets = [0; META::FIELD_COUNT + 1];
+                    let mut __field_offsets = [0; Meta::FIELD_COUNT + 1];
                     let mut offset = 0;
                     let mut index = 0;
                     $(
@@ -346,18 +346,18 @@ macro_rules! protocol2_builder {
                 )*
             }
 
-            impl META {
+            impl Meta {
                 const FIELD_COUNT: usize = [$(stringify!($field)),*].len();
                 $($(pub const [<$field:upper _VALUE>]: $type = $crate::protocol::FieldAccess::<$type>::constant($value as usize);)?)*
             }
 
-            impl <'a> $crate::protocol::Enliven<'a> for META {
+            impl <'a> $crate::protocol::Enliven<'a> for Meta {
                 type WithLifetime = S<'a>;
                 type ForMeasure = M<'a>;
                 type ForBuilder = B<'a>;
             }
 
-            impl $crate::protocol::FieldAccess<META> {
+            impl $crate::protocol::FieldAccess<Meta> {
                 #[inline(always)]
                 pub const fn name() -> &'static str {
                     stringify!($name)
