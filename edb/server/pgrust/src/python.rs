@@ -29,9 +29,12 @@ fn parse_dsn(py: Python, username: String, home_dir: String, s: String) -> PyRes
     let environ = os.getattr("environ")?;
     match conn_string::parse_postgres_url(&s, (username, environ)) {
         Ok(mut res) => {
-            if let Some(warning) = res.password.resolve(Path::new(&home_dir), &res.hosts, &res.database, &res.user)? {
+            if let Some(warning) =
+                res.password
+                    .resolve(Path::new(&home_dir), &res.hosts, &res.database, &res.user)?
+            {
                 let warnings = py.import("warnings")?;
-                warnings.call_method1("warn", (warning.to_string(), ))?;
+                warnings.call_method1("warn", (warning.to_string(),))?;
             }
             let paths = res.ssl.resolve(Path::new(&home_dir))?;
             // Use serde_pickle to get a python-compatible representation of the result

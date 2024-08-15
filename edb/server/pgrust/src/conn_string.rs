@@ -85,24 +85,28 @@ const PGPASSFILE: &str = ".pgpass";
 
 impl Password {
     /// Attempt to resolve a password against the given homedir.
-    pub fn resolve(&mut self, home: &Path, hosts: &[Host], database: &str, user: &str) -> Result<Option<PasswordWarning>, std::io::Error> {
+    pub fn resolve(
+        &mut self,
+        home: &Path,
+        hosts: &[Host],
+        database: &str,
+        user: &str,
+    ) -> Result<Option<PasswordWarning>, std::io::Error> {
         let passfile = match self {
             Password::Unspecified => {
                 let passfile = home.join(PGPASSFILE);
                 // Don't warn about implicit missing or inaccessible files
                 if !matches!(passfile.try_exists(), Ok(true)) {
                     *self = Password::Unspecified;
-                    return Ok(None)
+                    return Ok(None);
                 }
                 if !passfile.is_file() {
                     *self = Password::Unspecified;
                     return Ok(None);
                 }
                 passfile
-            },
-            Password::Specified(_) => {
-                return Ok(None)
-            },
+            }
+            Password::Specified(_) => return Ok(None),
             Password::Passfile(passfile) => {
                 let passfile = passfile.clone();
                 if matches!(passfile.try_exists(), Ok(false)) {
@@ -126,34 +130,35 @@ impl Password {
                     *self = Password::Unspecified;
                     return Ok(Some(PasswordWarning::NotAccessible(passfile)));
                 }
-                res => {
-                    res?
-                },
+                res => res?,
             };
             let permissions = metadata.permissions();
             let mode = permissions.mode();
-    
+
             if mode & (0o070) != 0 {
                 *self = Password::Unspecified;
                 return Ok(Some(PasswordWarning::Permissions(passfile, mode)));
             }
         }
-    
+
         let file = match OpenOptions::new().read(true).open(&passfile) {
             Err(err) if err.kind() == ErrorKind::PermissionDenied => {
                 *self = Password::Unspecified;
                 return Ok(Some(PasswordWarning::NotAccessible(passfile)));
-            },
-            res => {
-                res?
             }
+            res => res?,
         };
-        if let Some(password) = read_password_file(hosts, database, user, std::io::read_to_string(file)?.split('\n')) {
+        if let Some(password) = read_password_file(
+            hosts,
+            database,
+            user,
+            std::io::read_to_string(file)?.split('\n'),
+        ) {
             *self = Password::Specified(password);
         } else {
             *self = Password::Unspecified;
         }
-        return Ok(None)
+        return Ok(None);
     }
 }
 
@@ -662,11 +667,15 @@ pub fn parse_postgres_url(
     })
 }
 
-fn read_password_file(hosts: &[Host], database: &str, user: &str, reader: impl Iterator<Item = impl AsRef<str>>) -> Option<String> {
-    'outer:
-    for line in reader {
+fn read_password_file(
+    hosts: &[Host],
+    database: &str,
+    user: &str,
+    reader: impl Iterator<Item = impl AsRef<str>>,
+) -> Option<String> {
+    'outer: for line in reader {
         let line = line.as_ref().trim();
-        
+
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -729,7 +738,6 @@ fn read_password_file(hosts: &[Host], database: &str, user: &str, reader: impl I
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,18 +789,52 @@ cde:5433:*:*:password from pgpass for cde:5433
 *:*:testdb:*:password from pgpass for testdb
 # comment
 *:*:test\:db:test\\:password from pgpass with escapes
-        "#.trim();
+        "#
+        .trim();
 
         for (host, database, user, output) in [
-            (Host::Hostname("abc".to_owned(), 1234), "database", "user", Some("password from pgpass for user@abc")),
-            (Host::Hostname("localhost".to_owned(), 1234), "database", "user", Some("password from pgpass for localhost")),
-            (Host::Path("/tmp".into(), 1234), "database", "user", Some("password from pgpass for localhost")),
-            (Host::Hostname("hmm".to_owned(), 1234), "database", "testuser", Some("password from pgpass for testuser")),
-            (Host::Hostname("hostname".to_owned(), 1234), "test:db", r#"test\"#, Some("password from pgpass with escapes")),
-            (Host::Hostname("doesntexist".to_owned(), 1234), "db", "user", None),
+            (
+                Host::Hostname("abc".to_owned(), 1234),
+                "database",
+                "user",
+                Some("password from pgpass for user@abc"),
+            ),
+            (
+                Host::Hostname("localhost".to_owned(), 1234),
+                "database",
+                "user",
+                Some("password from pgpass for localhost"),
+            ),
+            (
+                Host::Path("/tmp".into(), 1234),
+                "database",
+                "user",
+                Some("password from pgpass for localhost"),
+            ),
+            (
+                Host::Hostname("hmm".to_owned(), 1234),
+                "database",
+                "testuser",
+                Some("password from pgpass for testuser"),
+            ),
+            (
+                Host::Hostname("hostname".to_owned(), 1234),
+                "test:db",
+                r#"test\"#,
+                Some("password from pgpass with escapes"),
+            ),
+            (
+                Host::Hostname("doesntexist".to_owned(), 1234),
+                "db",
+                "user",
+                None,
+            ),
         ] {
-            assert_eq!(read_password_file(&[host], database, user, input.split('\n')), output.map(|s| s.to_owned()));
-        };
+            assert_eq!(
+                read_password_file(&[host], database, user, input.split('\n')),
+                output.map(|s| s.to_owned())
+            );
+        }
     }
 
     #[test]
