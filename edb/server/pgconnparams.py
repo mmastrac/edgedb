@@ -22,9 +22,7 @@ import enum
 import getpass
 import pathlib
 import platform
-import re
 import ssl as ssl_module
-import stat
 import warnings
 import edb.server._pg_rust
 
