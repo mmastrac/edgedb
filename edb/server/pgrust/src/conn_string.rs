@@ -3,6 +3,7 @@ use percent_encoding::percent_decode_str;
 use serde_derive::Serialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
@@ -42,8 +43,8 @@ pub enum ParseError {
 pub enum Host {
     Hostname(String, u16),
     IP(IpAddr, u16, Option<String>),
-    Path(String),
-    Abstract(String),
+    Path(String, u16),
+    Abstract(String, u16),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -55,7 +56,100 @@ pub enum Password {
     /// The password was specified.
     Specified(String),
     /// The passfile is specified.
-    Passfile(String),
+    Passfile(PathBuf),
+}
+
+#[derive(Serialize)]
+pub enum PasswordWarning {
+    NotFile(PathBuf),
+    NotExists(PathBuf),
+    NotAccessible(PathBuf),
+    Permissions(PathBuf, u32),
+}
+
+impl std::fmt::Display for PasswordWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PasswordWarning::NotFile(path) => write!(f, "Password file {path:?} is not a plain file"),
+            PasswordWarning::NotExists(path) => write!(f, "Password file {path:?} does not exist"),
+            PasswordWarning::NotAccessible(path) => write!(f, "Password file {path:?} is not accessible"),
+            PasswordWarning::Permissions(path, mode) => write!(f, "Password file {path:?} has group or world access ({mode:o}); permissions should be u=rw (0600) or less"),
+        }
+    }
+}
+
+impl Password {
+    /// Attempt to resolve a password against the given homedir.
+    pub fn resolve(&mut self, home: &Path, hosts: &[Host], database: &str, user: &str) -> Result<Option<PasswordWarning>, std::io::Error> {
+        let passfile = match self {
+            Password::Unspecified => {
+                let passfile = home.join("pgpass.conf");
+                // Don't warn about implicit missing or inaccessible files
+                if !matches!(passfile.try_exists(), Ok(true)) {
+                    *self = Password::Unspecified;
+                    return Ok(None)
+                }
+                if !passfile.is_file() {
+                    *self = Password::Unspecified;
+                    return Ok(None);
+                }
+                passfile
+            },
+            Password::Specified(_) => {
+                return Ok(None)
+            },
+            Password::Passfile(passfile) => {
+                let passfile = passfile.clone();
+                if matches!(passfile.try_exists(), Ok(false)) {
+                    *self = Password::Unspecified;
+                    return Ok(Some(PasswordWarning::NotExists(passfile)));
+                }
+                if passfile.exists() && !passfile.is_file() {
+                    *self = Password::Unspecified;
+                    return Ok(Some(PasswordWarning::NotFile(passfile)));
+                }
+                passfile
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let metadata = match passfile.metadata() {
+                Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                    *self = Password::Unspecified;
+                    return Ok(Some(PasswordWarning::NotAccessible(passfile)));
+                }
+                res => {
+                    res?
+                },
+            };
+            let permissions = metadata.permissions();
+            let mode = permissions.mode();
+    
+            if mode & (0o070) != 0 {
+                *self = Password::Unspecified;
+                return Ok(Some(PasswordWarning::Permissions(passfile, mode)));
+            }
+        }
+    
+        let file = match OpenOptions::new().read(true).open(&passfile) {
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                *self = Password::Unspecified;
+                return Ok(Some(PasswordWarning::NotAccessible(passfile)));
+            },
+            res => {
+                res?
+            }
+        };
+        if let Some(password) = read_password_file(hosts, database, user, std::io::read_to_string(file)?.split('\n')) {
+            *self = Password::Specified(password);
+        } else {
+            *self = Password::Unspecified;
+        }
+        return Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -241,7 +335,7 @@ fn parse_hostlist(
         let port = specified_ports[i % specified_ports.len()];
 
         let host = if hostspec.starts_with('/') {
-            Host::Path(hostspec.to_string())
+            Host::Path(hostspec.to_string(), port)
         } else if hostspec.starts_with('[') {
             // Handling IPv6 address
             let end_bracket = hostspec
@@ -459,7 +553,7 @@ pub fn parse_postgres_url(
         Some(p) => Password::Specified(p.into_owned()),
         None => {
             if let Some(passfile) = passfile.or_else(|| env.read("PGPASSFILE")) {
-                Password::Passfile(passfile.into_owned())
+                Password::Passfile(passfile.into_owned().into())
             } else {
                 Password::Unspecified
             }
@@ -563,6 +657,74 @@ pub fn parse_postgres_url(
     })
 }
 
+fn read_password_file(hosts: &[Host], database: &str, user: &str, reader: impl Iterator<Item = impl AsRef<str>>) -> Option<String> {
+    'outer:
+    for line in reader {
+        let line = line.as_ref().trim();
+        
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let mut parts = vec![String::new()];
+        let mut backslash = false;
+        for c in line.chars() {
+            if backslash {
+                parts.last_mut().unwrap().push(c);
+                backslash = false;
+                continue;
+            }
+            if c == '\\' {
+                backslash = true;
+                continue;
+            }
+            if c == ':' && parts.len() <= 4 {
+                parts.push(String::new());
+                continue;
+            }
+            parts.last_mut().unwrap().push(c);
+        }
+
+        if parts.len() == 5 {
+            for host in hosts {
+                let port = match host {
+                    Host::Hostname(hostname, port) => {
+                        if parts[0] != "*" && parts[0] != hostname.as_str() {
+                            continue 'outer;
+                        }
+                        *port
+                    }
+                    Host::IP(hostname, port, _) => {
+                        if parts[0] != "*" && str::parse(&parts[0]) != Ok(*hostname) {
+                            continue 'outer;
+                        }
+                        *port
+                    }
+                    Host::Path(_, port) | Host::Abstract(_, port) => {
+                        if parts[0] != "*" && parts[0] != "localhost" {
+                            continue 'outer;
+                        }
+                        *port
+                    }
+                };
+                if parts[1] != "*" && str::parse(&parts[1]) != Ok(port) {
+                    continue 'outer;
+                }
+                if parts[2] != "*" && parts[2] != database {
+                    continue 'outer;
+                }
+                if parts[3] != "*" && parts[3] != user {
+                    continue 'outer;
+                }
+                return Some(parts.pop().unwrap());
+            }
+        }
+    }
+
+    None
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,7 +742,7 @@ mod tests {
         );
         assert_eq!(
             parse_hostlist(&["/path"], &[1234]),
-            Ok(vec![Host::Path("/path".to_string())])
+            Ok(vec![Host::Path("/path".to_string(), 1234)])
         );
         assert_eq!(
             parse_hostlist(&["[2001:db8::1234]", "[::1]"], &[1234]),
@@ -601,6 +763,31 @@ mod tests {
                 Some("eth0".to_string())
             ),])
         );
+    }
+
+    #[test]
+    fn test_parse_password_file() {
+        let input = r#"
+abc:*:*:user:password from pgpass for user@abc
+localhost:*:*:*:password from pgpass for localhost
+cde:5433:*:*:password from pgpass for cde:5433
+
+*:*:*:testuser:password from pgpass for testuser
+*:*:testdb:*:password from pgpass for testdb
+# comment
+*:*:test\:db:test\\:password from pgpass with escapes
+        "#.trim();
+
+        for (host, database, user, output) in [
+            (Host::Hostname("abc".to_owned(), 1234), "database", "user", Some("password from pgpass for user@abc")),
+            (Host::Hostname("localhost".to_owned(), 1234), "database", "user", Some("password from pgpass for localhost")),
+            (Host::Path("/tmp".into(), 1234), "database", "user", Some("password from pgpass for localhost")),
+            (Host::Hostname("hmm".to_owned(), 1234), "database", "testuser", Some("password from pgpass for testuser")),
+            (Host::Hostname("hostname".to_owned(), 1234), "test:db", r#"test\"#, Some("password from pgpass with escapes")),
+            (Host::Hostname("doesntexist".to_owned(), 1234), "db", "user", None),
+        ] {
+            assert_eq!(read_password_file(&[host], database, user, input.split('\n')), output.map(|s| s.to_owned()));
+        };
     }
 
     #[test]
@@ -670,7 +857,7 @@ mod tests {
                 hosts: vec![Host::Hostname("fgh".to_string(), 5432,),],
                 database: r#"test\:db"#.to_string(),
                 user: r#"test\\"#.to_string(),
-                password: Password::Passfile("/tmp/tmpkrjuaje4".to_string(),),
+                password: Password::Passfile("/tmp/tmpkrjuaje4".to_string().into(),),
                 ssl: Ssl::Enable(SslMode::Prefer, Default::default()),
                 ..Default::default()
             }
@@ -725,7 +912,7 @@ mod tests {
         assert_eq!(
             parse_postgres_url("postgres://user@?port=56226&host=%2Ftmp", ()).unwrap(),
             ConnectionParameters {
-                hosts: vec![Host::Path("/tmp".to_string(),)],
+                hosts: vec![Host::Path("/tmp".to_string(), 56226,),],
                 database: "user".to_string(),
                 user: "user".to_string(),
                 password: Password::Unspecified,

@@ -55,6 +55,7 @@ pub(crate) use message_group;
 ///
 /// ```rust
 /// use pgrust::protocol::*;
+/// use pgrust::protocol::messages::*;
 ///
 /// let buf = [0, 1, 2];
 /// match_message!(&buf, Backend {

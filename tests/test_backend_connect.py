@@ -625,7 +625,7 @@ class TestConnectParams(tb.TestCase):
         {
             'name': 'dsn_only_unix',
             'dsn': 'postgresql:///dbname?host=/unix_sock/test&user=spam',
-            'result': ([('/unix_sock/test', 0)], {
+            'result': ([('/unix_sock/test', 5432)], {
                 'user': 'spam',
                 'database': 'dbname'})
         },
@@ -713,7 +713,7 @@ class TestConnectParams(tb.TestCase):
             'name': 'dsn_only_quoted_unix_host_port_in_params',
             'dsn': 'postgres://user@?port=56226&host=%2Ftmp',
             'result': (
-                [('/tmp', 0)],
+                [('/tmp', 56226)],
                 {
                     'user': 'user',
                     'database': 'user',
@@ -729,7 +729,7 @@ class TestConnectParams(tb.TestCase):
             'result': (
                 [(
                     '/cloudsql/project:region:instance-name',
-                    0,
+                    5432,
                 )], {
                     'user': 'spam',
                     'database': 'db'
@@ -745,7 +745,7 @@ class TestConnectParams(tb.TestCase):
                     ('127.0.0.1', 5432),
                     (
                         '/cloudsql/project:region:instance-name',
-                        0,
+                        5432,
                     ),
                     ('localhost', 5433)
                 ], {
@@ -969,7 +969,7 @@ class TestConnectParams(tb.TestCase):
                     passfile.name
                 ),
                 'result': (
-                    [('/tmp', 0)],
+                    [('/tmp', 5432)],
                     {
                         'password': 'password from pgpass for localhost',
                         'user': 'user',
@@ -1026,14 +1026,14 @@ class TestConnectParams(tb.TestCase):
             # test escaping
             self.run_testcase({
                 'dsn': 'postgres://{}@fgh/{}?passfile={}'.format(
-                    R'test\\', R'test\:db', passfile.name
+                    'test\\', 'test:db', passfile.name
                 ),
                 'result': (
                     [('fgh', 5432)],
                     {
                         'password': 'password from pgpass with escapes',
-                        'user': R'test\\',
-                        'database': R'test\:db',
+                        'user': 'test\\',
+                        'database': R'test:db',
                     }
                 )
             })
@@ -1049,7 +1049,7 @@ class TestConnectParams(tb.TestCase):
 
             with self.assertWarnsRegex(
                     UserWarning,
-                    'password file .* has group or world access'):
+                    'Password file .* has group or world access'):
                 self.run_testcase({
                     'dsn': 'postgres://user@abc/db?passfile={}'.format(
                         passfile.name
@@ -1068,7 +1068,7 @@ class TestConnectParams(tb.TestCase):
         with tempfile.TemporaryDirectory() as passfile:
             with self.assertWarnsRegex(
                     UserWarning,
-                    'password file .* is not a plain file'):
+                    'Password file .* is not a plain file'):
                 self.run_testcase({
                     'dsn': 'postgres://user@abc/db?passfile={}'.format(
                         passfile
@@ -1084,26 +1084,11 @@ class TestConnectParams(tb.TestCase):
 
     def test_connect_pgpass_nonexistent(self):
         # nonexistent passfile is OK
-        self.run_testcase({
-            'dsn': 'postgres://user@abc/db?passfile=totally+nonexistent',
-            'result': (
-                [('abc', 5432)],
-                {
-                    'user': 'user',
-                    'database': 'db',
-                }
-            )
-        })
-
-    def test_connect_pgpass_inaccessible_file(self):
-        with tempfile.NamedTemporaryFile('w+t') as passfile:
-            os.chmod(passfile.name, stat.S_IWUSR)
-
-            # nonexistent passfile is OK
+        with self.assertWarnsRegex(
+            UserWarning,
+            'Password file .* does not exist'):
             self.run_testcase({
-                'dsn': 'postgres://user@abc/db?passfile={}'.format(
-                    passfile.name
-                ),
+                'dsn': 'postgres://user@abc/db?passfile=totally+nonexistent',
                 'result': (
                     [('abc', 5432)],
                     {
@@ -1113,25 +1098,48 @@ class TestConnectParams(tb.TestCase):
                 )
             })
 
+    def test_connect_pgpass_inaccessible_file(self):
+        with tempfile.NamedTemporaryFile('w+t') as passfile:
+            os.chmod(passfile.name, stat.S_IWUSR)
+            with self.assertWarnsRegex(
+                UserWarning,
+                'Password file .* is not accessible'):
+                # inaccessible passfile is OK
+                self.run_testcase({
+                    'dsn': 'postgres://user@abc/db?passfile={}'.format(
+                        passfile.name
+                    ),
+                    'result': (
+                        [('abc', 5432)],
+                        {
+                            'user': 'user',
+                            'database': 'db',
+                        }
+                    )
+                })
+
     def test_connect_pgpass_inaccessible_directory(self):
         with tempfile.TemporaryDirectory() as passdir:
             with tempfile.NamedTemporaryFile('w+t', dir=passdir) as passfile:
                 os.chmod(passdir, stat.S_IWUSR)
 
                 try:
-                    # nonexistent passfile is OK
-                    self.run_testcase({
-                        'dsn': 'postgres://user@abc/db?passfile={}'.format(
-                            passfile.name
-                        ),
-                        'result': (
-                            [('abc', 5432)],
-                            {
-                                'user': 'user',
-                                'database': 'db',
-                            }
-                        )
-                    })
+                    with self.assertWarnsRegex(
+                        UserWarning,
+                        'Password file .* is not accessible'):
+                        # inaccessible passfile is OK
+                        self.run_testcase({
+                            'dsn': 'postgres://user@abc/db?passfile={}'.format(
+                                passfile.name
+                            ),
+                            'result': (
+                                [('abc', 5432)],
+                                {
+                                    'user': 'user',
+                                    'database': 'db',
+                                }
+                            )
+                        })
                 finally:
                     os.chmod(passdir, stat.S_IRWXU)
 

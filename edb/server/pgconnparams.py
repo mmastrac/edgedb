@@ -84,90 +84,6 @@ else:
         return pathlib.Path.home() / '.postgresql'
 
 
-def _read_password_file(passfile: pathlib.Path) -> List[Tuple[str, ...]]:
-
-    passtab = []
-
-    try:
-        if not passfile.exists():
-            return []
-
-        if not passfile.is_file():
-            warnings.warn(
-                'password file {!r} is not a plain file'.format(passfile),
-                stacklevel=4,
-            )
-
-            return []
-
-        if _system != 'Windows':
-            if passfile.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-                warnings.warn(
-                    f'password file {passfile!r} has group or world access; '
-                    'permissions should be u=rw (0600) or less',
-                    stacklevel=4,
-                )
-
-                return []
-
-        with passfile.open('rt') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    # Skip empty lines and comments.
-                    continue
-                # Backslash escapes both itself and the colon,
-                # which is a record separator.
-                line = line.replace(R'\\', '\n')
-                passtab.append(tuple(
-                    p.replace('\n', R'\\')
-                    for p in re.split(r'(?<!\\):', line, maxsplit=4)
-                ))
-    except IOError:
-        pass
-
-    return passtab
-
-
-def _read_password_from_pgpass(
-    *,
-    passfile: Optional[pathlib.Path],
-    addrs: List[Tuple[str, int]],
-    database: str,
-    user: str,
-) -> Optional[str]:
-    """Parse the pgpass file and return the matching password.
-
-    :return:
-        Password string, if found, ``None`` otherwise.
-    """
-
-    if passfile is not None:
-        passtab = _read_password_file(passfile)
-        if not passtab:
-            return None
-
-    for host, port in addrs:
-        if host.startswith('/'):
-            # Unix sockets get normalized into 'localhost'
-            host = 'localhost'
-
-        for phost, pport, pdatabase, puser, ppassword in passtab:
-            if phost != '*' and phost != host:
-                continue
-            if pport != '*' and pport != str(port):
-                continue
-            if pdatabase != '*' and pdatabase != database:
-                continue
-            if puser != '*' and puser != user:
-                continue
-
-            # Found a match.
-            return ppassword
-
-    return None
-
-
 def _parse_tls_version(tls_version: str) -> ssl_module.TLSVersion:
     if tls_version.startswith('SSL'):
         raise ValueError(
@@ -237,15 +153,18 @@ def parse_dsn(
         if 'Hostname' in host:
             host, port = host['Hostname']
             addrs.append((host, port))
-        if 'IP' in host:
-            hostname = host['IP'][0]
+        elif 'IP' in host:
+            ip, port, scope = host['IP']
             # Reconstruct the scope ID
-            if host['IP'][2]:
-                hostname = f'{hostname}%{host['IP'][2]}'
-            addrs.append((hostname, host['IP'][1]))
+            if scope:
+                ip = f'{ip}%{scope}'
+            addrs.append((ip, port))
         elif 'Path' in host:
-            path = host['Path']
-            addrs.append((path, 0))
+            path, port = host['Path']
+            addrs.append((path, port))
+        elif 'Abstract' in host:
+            path, port = host['Abstract']
+            addrs.append((path, port))
 
     # Database/user/password/connect_timeout
     database: str = str(parsed['database']) or ''
@@ -254,20 +173,12 @@ def parse_dsn(
         if parsed['connect_timeout'] else None
 
     # Extract password from the dict
-    passfile: pathlib.Path | None = None
     password: str | None = ""
     password_config = parsed['password']
     if 'Unspecified' in password_config:
-        passfile = get_pg_home_directory() / 'pgpass.conf'
-    elif 'Passfile' in password_config:
-        passfile = pathlib.Path(password_config['Passfile'])
+        password = ''
     elif 'Specified' in password_config:
         password = password_config['Specified']
-    if passfile:
-        password = _read_password_from_pgpass(passfile=passfile,
-                                              addrs=addrs,
-                                              database=database,
-                                              user=user)
 
     params = ConnectionParameters(
         user=user,
