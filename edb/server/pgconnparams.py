@@ -64,7 +64,6 @@ if _system == 'Windows':
     import ctypes.wintypes
 
     CSIDL_APPDATA = 0x001a
-    PGPASSFILE = 'pgpass.conf'
 
     def get_pg_home_directory() -> pathlib.Path:
         # We cannot simply use expanduser() as that returns the user's
@@ -74,12 +73,12 @@ if _system == 'Windows':
         r = ctypes.windll.shell32.SHGetFolderPathW(  # type: ignore
             0, CSIDL_APPDATA, 0, 0, buf)
         if r:
+            # Fall back to the home directory
+            warnings.warn("Could not resolve %AppData%", stacklevel=2)
             return pathlib.Path.home()
         else:
             return pathlib.Path(buf.value) / 'postgresql'
 else:
-    PGPASSFILE = '.pgpass'
-
     def get_pg_home_directory() -> pathlib.Path:
         return pathlib.Path.home() / '.postgresql'
 

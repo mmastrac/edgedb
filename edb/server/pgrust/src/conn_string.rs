@@ -78,12 +78,17 @@ impl std::fmt::Display for PasswordWarning {
     }
 }
 
+#[cfg(windows)]
+const PGPASSFILE: &str = "pgpass.conf";
+#[cfg(not(windows))]
+const PGPASSFILE: &str = ".pgpass";
+
 impl Password {
     /// Attempt to resolve a password against the given homedir.
     pub fn resolve(&mut self, home: &Path, hosts: &[Host], database: &str, user: &str) -> Result<Option<PasswordWarning>, std::io::Error> {
         let passfile = match self {
             Password::Unspecified => {
-                let passfile = home.join("pgpass.conf");
+                let passfile = home.join(PGPASSFILE);
                 // Don't warn about implicit missing or inaccessible files
                 if !matches!(passfile.try_exists(), Ok(true)) {
                     *self = Password::Unspecified;
