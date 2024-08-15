@@ -208,7 +208,7 @@ pub struct SslParameters {
     pub verify_crl_check_chain: Option<bool>,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Debug, Serialize)]
 pub struct SslPaths {
     pub rootcert: Option<PathBuf>,
     pub crl: Option<PathBuf>,

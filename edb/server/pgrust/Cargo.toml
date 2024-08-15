@@ -65,7 +65,3 @@ features = ["macros", "rt-multi-thread", "time", "test-util"]
 [lib]
 crate-type = ["lib", "cdylib"]
 path = "src/lib.rs"
-
-[[example]]
-name = "connect"
-path = "examples/connect.rs"
