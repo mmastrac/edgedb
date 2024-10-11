@@ -1,6 +1,39 @@
 use self::meta::*;
 use super::gen::protocol;
-use crate::protocol::meta::*;
+use crate::protocol::{meta::*, message_group::message_group};
+
+// message_group!(
+//     EdgeDBBackend: Message = [
+//         AuthenticationOk,
+//         AuthenticationSASL,
+//         AuthenticationSASLContinue,
+//         AuthenticationSASLFinal,
+//         BackendKeyData,
+//         CommandComplete,
+//         ErrorResponse,
+//         LogMessage,
+//         ParameterStatus,
+//         ReadyForQuery
+//     ]
+// );
+
+// message_group!(
+//     EdgeDBFrontend: Message = [
+//         Bind,
+//         Close,
+//         CopyData,
+//         CopyDone,
+//         CopyFail,
+//         Describe,
+//         Execute,
+//         Flush,
+//         FunctionCall,
+//         Parse,
+//         Query,
+//         Sync,
+//         Terminate
+//     ]
+// );
 
 protocol!(
 /// The `ErrorResponse` struct represents an error message sent from the server.

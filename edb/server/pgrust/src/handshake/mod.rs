@@ -12,6 +12,7 @@ pub enum ConnectionSslRequirement {
 mod client_state_machine;
 mod server_auth;
 mod server_state_machine;
+mod edgedb_server;
 
 pub mod client {
     pub use super::client_state_machine::*;
