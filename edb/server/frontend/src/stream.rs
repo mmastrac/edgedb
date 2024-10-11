@@ -7,7 +7,11 @@ use core::str;
 use hyper::{HeaderMap, Version};
 use openssl::{ssl::NameType, x509::X509};
 use std::{
-    collections::HashMap, io::{ErrorKind, IoSlice}, pin::Pin, sync::Arc, task::{Context, Poll}
+    collections::HashMap,
+    io::{ErrorKind, IoSlice},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
@@ -309,7 +313,10 @@ impl ListenerStream {
                 } else {
                     ssl.connect().await
                 }
-                .map_err(|e| { error!("{:?} {:?}", e.io_error(), e.ssl_error()); std::io::Error::new(std::io::ErrorKind::InvalidData, e)})?;
+                .map_err(|e| {
+                    error!("{:?} {:?}", e.io_error(), e.ssl_error());
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                })?;
 
                 let ssl = ssl_stream.ssl();
                 let stream_properties = StreamProperties {
@@ -375,11 +382,11 @@ impl ListenerStream {
     pub fn peer_addr(&self) -> Option<&ListenerAddress> {
         self.stream_properties.local_addr.as_ref()
     }
-    
+
     pub fn upgrade(self, props: StreamPropertiesBuilder) -> Self {
         Self {
             inner: self.inner,
-            stream_properties: self.stream_properties.upgrade(props)
+            stream_properties: self.stream_properties.upgrade(props),
         }
     }
 }

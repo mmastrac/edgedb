@@ -1,9 +1,10 @@
 // Constants
 use openssl::ssl::{Ssl, SslContext, SslMethod};
+use pgrust::auth::AuthType;
 use pgrust::connection::dsn::{Host, HostType};
 use pgrust::connection::{connect_raw_ssl, ConnectionError, Credentials, ResolvedTarget};
 use pgrust::errors::PgServerError;
-use pgrust::handshake::{AuthType, ConnectionSslRequirement};
+use pgrust::handshake::ConnectionSslRequirement;
 use rstest::rstest;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};

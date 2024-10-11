@@ -180,19 +180,13 @@ impl ListenerConfig for TestListenerConfig {
     fn ssl_config_sni(&self, hostname: Option<&str>) -> Result<(SslConfig, Option<String>), ()> {
         use std::path::PathBuf;
 
-        let package_root = std::env::var("CARGO_MANIFEST_DIR")
-            .expect("CARGO_MANIFEST_DIR not set");
-        let cert_path = Path::new(&package_root)
-            .join("../../../tests/certs/server.cert.pem");
-        let key_path = Path::new(&package_root)
-            .join("../../../tests/certs/server.key.pem");
+        let package_root = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+        let cert_path = Path::new(&package_root).join("../../../tests/certs/server.cert.pem");
+        let key_path = Path::new(&package_root).join("../../../tests/certs/server.key.pem");
 
         let ssl_config = SslConfig::new(cert_path, key_path);
 
-        Ok((
-            ssl_config,
-            None,
-        ))
+        Ok((ssl_config, None))
     }
 
     fn listen_address(&self) -> impl Stream<Item = std::io::Result<Vec<ListenerAddress>>> {

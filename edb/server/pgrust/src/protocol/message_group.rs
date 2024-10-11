@@ -98,7 +98,7 @@ pub(crate) use message_group;
 #[macro_export]
 macro_rules! __match_message {
     ($buf:expr, $messages:ty {
-        $(( $i1:path $(as $i2:ident )?) => $impl:block,)*
+        $(( $i1:path $(as $i2:ident )?) $(if $cond:expr)? => $impl:block,)*
         $unknown:ident => $unknown_impl:block $(,)?
     }) => {
         'block: {
@@ -106,7 +106,7 @@ macro_rules! __match_message {
             let res = match __message {
                 Ok(__message) => {
                     $(
-                        if <$i1>::is_buffer(&__message.as_ref()) {
+                        if $($cond &&)? <$i1>::is_buffer(&__message.as_ref()) {
                             match(<$i1>::new(&__message.as_ref())) {
                                 Ok(__tmp) => {
                                     $(let $i2 = __tmp;)?

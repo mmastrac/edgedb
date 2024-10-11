@@ -5,9 +5,8 @@ use edb_frontend::listener::*;
 use edb_frontend::service::*;
 use edb_frontend::stream::*;
 use hyper::Response;
-use openssl::ssl::{SslContext, SslMethod};
+use pgrust::auth::CredentialData;
 use pgrust::auth::StoredHash;
-use pgrust::handshake::server::CredentialData;
 use tokio::io::AsyncReadExt;
 use tokio::io::ReadBuf;
 
@@ -39,12 +38,12 @@ impl BabelfishService for ExampleService {
             "accept_stream: {:?}, {:?}, {:?}",
             identity, language, stream
         );
-        async move { 
+        async move {
             loop {
                 let mut buf = [0; 1024];
                 stream.read_buf(&mut ReadBuf::new(&mut buf)).await?;
             }
-            Ok(()) 
+            Ok(())
         }
     }
 

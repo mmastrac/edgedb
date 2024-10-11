@@ -562,9 +562,11 @@ name = "edb-frontend"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "derive_more",
  "futures",
  "h2",
+ "hexdump",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -578,6 +580,7 @@ dependencies = [
  "sha1",
  "strum",
  "test-log",
+ "thiserror",
  "tokio",
  "tokio-openssl",
  "tower 0.5.1",

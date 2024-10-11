@@ -1,4 +1,4 @@
-use pgrust::handshake::server::CredentialData;
+use pgrust::auth::CredentialData;
 
 use crate::stream::ListenerStream;
 use std::{
@@ -82,16 +82,10 @@ impl ConnectionIdentityBuilder {
 
     pub fn build(self) -> Result<ConnectionIdentity, IdentityError> {
         let tenant = Self::unwrap_or_clone(self.tenant);
-        let db = Self::unwrap_or_clone(self.db)
-            .ok_or(IdentityError::NoDb)?;
-        let user = Self::unwrap_or_clone(self.user)
-            .ok_or(IdentityError::NoUser)?;
+        let db = Self::unwrap_or_clone(self.db).ok_or(IdentityError::NoDb)?;
+        let user = Self::unwrap_or_clone(self.user).ok_or(IdentityError::NoUser)?;
 
-        Ok(ConnectionIdentity {
-            tenant,
-            db,
-            user,
-        })
+        Ok(ConnectionIdentity { tenant, db, user })
     }
 }
 

@@ -3,9 +3,7 @@
 use crate::{
     config::ListenerAddress,
     hyper::HyperUpgradedStream,
-    service::{
-        AuthTarget, BabelfishService, BranchDB, ConnectionIdentityBuilder, StreamLanguage
-    },
+    service::{AuthTarget, BabelfishService, BranchDB, ConnectionIdentityBuilder, StreamLanguage},
     stream::{ListenerStream, StreamProperties, StreamPropertiesBuilder, TransportType},
     stream_type::{
         identify_stream, negotiate_alpn, negotiate_ws_protocol, PostgresInitialMessage,
@@ -15,19 +13,18 @@ use crate::{
 use futures::StreamExt;
 use hyper::{upgrade::OnUpgrade, Request, Response, StatusCode};
 use openssl::ssl::{AlpnError, NameType, SniError, Ssl, SslAlert, SslContext, SslMethod};
-use pgrust::{errors::{PgError, PgErrorConnectionException, PgErrorInvalidAuthorizationSpecification}, 
+use pgrust::{
+    errors::{PgError, PgErrorConnectionException, PgErrorInvalidAuthorizationSpecification},
     handshake::{
         server::{ConnectionDrive, ConnectionEvent, ServerState},
         ConnectionSslRequirement,
-    }}
-;
+    },
+};
 use scopeguard::defer;
-use std::
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    }
-;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    OnceLock,
+};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -534,16 +531,15 @@ async fn handle_stream_postgres_initial(
 
     while !server_state.is_done() {
         let mut send_buf = std::mem::take(&mut *send_buf.lock().unwrap());
-            if !send_buf.is_empty() {
-                eprintln!("Sending {send_buf:?}");
-                socket.write_all(&send_buf).await?;
-            }
-         else if auth_ready.swap(false, Ordering::SeqCst) {
+        if !send_buf.is_empty() {
+            eprintln!("Sending {send_buf:?}");
+            socket.write_all(&send_buf).await?;
+        } else if auth_ready.swap(false, Ordering::SeqCst) {
             let built = match identity.clone().build() {
                 Ok(built) => built,
                 Err(e) => {
                     server_state.drive(ConnectionDrive::Fail(PgError::InvalidAuthorizationSpecification(PgErrorInvalidAuthorizationSpecification::InvalidAuthorizationSpecification), "Missing database or user"), &mut update).unwrap();
-                    return Ok(())
+                    return Ok(());
                 }
             };
             resolved_identity = Some(built);
@@ -555,11 +551,11 @@ async fn handle_stream_postgres_initial(
                 )
                 .await?;
             server_state
-            .drive(
-                ConnectionDrive::AuthInfo(auth.auth_type(), auth),
-                &mut update,
-            )
-            .unwrap();
+                .drive(
+                    ConnectionDrive::AuthInfo(auth.auth_type(), auth),
+                    &mut update,
+                )
+                .unwrap();
         } else if params_ready.swap(false, Ordering::SeqCst) {
             server_state
                 .drive(ConnectionDrive::Ready(1, 2), &mut update)
@@ -584,7 +580,10 @@ async fn handle_stream_postgres_initial(
         stream_params: Some(startup_params),
         ..Default::default()
     });
-    bound_config.service().accept_stream(resolved_identity.unwrap(), StreamLanguage::Postgres, socket).await;
+    bound_config
+        .service()
+        .accept_stream(resolved_identity.unwrap(), StreamLanguage::Postgres, socket)
+        .await;
 
     Ok(())
 }
@@ -671,7 +670,9 @@ impl BoundServer {
                 return;
             }
             tokio::task::spawn(async move {
-                if let Err(e) = handle_connection_inner(StreamState::Raw, stm, identity, config).await {
+                if let Err(e) =
+                    handle_connection_inner(StreamState::Raw, stm, identity, config).await
+                {
                     error!("Connection error: {e:?}");
                 }
             });
@@ -719,7 +720,11 @@ fn create_ssl_for_listener_config(
             let stream_props = ex_data.stream_props.clone();
             let ssl_new = ssl_new.maybe_configure(move |ctx| {
                 ctx.set_alpn_select_callback(move |_, alpn| {
-                    trace!("Server ALPN callback: {:?} ({:?})", std::str::from_utf8(alpn), alpn);
+                    trace!(
+                        "Server ALPN callback: {:?} ({:?})",
+                        std::str::from_utf8(alpn),
+                        alpn
+                    );
                     let protocol = negotiate_alpn(config.as_ref(), alpn, &stream_props);
                     trace!("Negotiated: {protocol:?}");
                     if !alpn.is_empty() && protocol.is_none() {
@@ -856,7 +861,7 @@ mod tests {
     use hyper::Uri;
     use hyper_util::rt::TokioIo;
     use openssl::ssl::{Ssl, SslContext, SslMethod};
-    use pgrust::handshake::server::CredentialData;
+    use pgrust::auth::CredentialData;
     use rstest::rstest;
 
     use crate::{

@@ -1,6 +1,8 @@
-use super::{AuthType, ConnectionSslRequirement};
+use super::ConnectionSslRequirement;
 use crate::{
-    auth::{self, generate_salted_password, ClientEnvironment, ClientTransaction, Sha256Out},
+    auth::{
+        self, generate_salted_password, AuthType, ClientEnvironment, ClientTransaction, Sha256Out,
+    },
     connection::{invalid_state, ConnectionError, Credentials, SslError},
     errors::PgServerError,
     protocol::{

@@ -9,37 +9,9 @@ pub enum ConnectionSslRequirement {
     Required,
 }
 
-/// Specifies the type of authentication or indicates the authentication method used for a connection.
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
-pub enum AuthType {
-    /// Denies a login or indicates that a connection was denied.
-    ///
-    /// When used with the server, this will cause it to emulate the given
-    /// authentication type, but unconditionally return a failure.
-    ///
-    /// This is used for testing purposes, and to emulate timing when a user
-    /// does not exist.
-    #[default]
-    Deny,
-    /// Trusts a login without requiring authentication, or indicates
-    /// that a connection required no authentication.
-    ///
-    /// When used with the server side of the handshake, this will cause it to
-    /// emulate the given authentication type, but unconditionally succeed.
-    /// Not compatible with SCRAM-SHA-256 as that protocol requires server and client
-    /// to cryptographically agree on a password.
-    Trust,
-    /// Plain text authentication, or indicates that plain text authentication was required.
-    Plain,
-    /// MD5 password authentication, or indicates that MD5 password authentication was required.
-    Md5,
-    /// SCRAM-SHA-256 authentication, or indicates that SCRAM-SHA-256 authentication was required.
-    ScramSha256,
-}
-
 mod client_state_machine;
-mod server_state_machine;
 mod server_auth;
+mod server_state_machine;
 
 pub mod client {
     pub use super::client_state_machine::*;
@@ -57,9 +29,9 @@ mod tests {
         ConnectionSslRequirement,
     };
     use crate::{
+        auth::{AuthType, CredentialData},
         connection::Credentials,
         errors::{PgError, PgServerError},
-        handshake::{server::CredentialData, AuthType},
         protocol::{InitialMessage, Message},
     };
     use rstest::rstest;
@@ -154,7 +126,7 @@ mod tests {
 
     /// We test the full matrix of server and client combinations.
     #[rstest]
-    #[test]
+    #[test_log::test]
     fn test_both(
         #[values(
             AuthType::Deny,

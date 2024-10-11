@@ -2,12 +2,13 @@ use super::{
     stream::{Stream, StreamWithUpgrade, UpgradableStream},
     ConnectionError, Credentials,
 };
+use crate::auth::AuthType;
 use crate::handshake::{
     client::{
         ConnectionDrive, ConnectionState, ConnectionStateSend, ConnectionStateType,
         ConnectionStateUpdate,
     },
-    AuthType, ConnectionSslRequirement,
+    ConnectionSslRequirement,
 };
 use crate::protocol::{meta, SSLResponse, StructBuffer};
 use std::collections::HashMap;
