@@ -1,5 +1,5 @@
 macro_rules! message_group {
-    ($(#[$doc:meta])* $group:ident : $super:ident = [$($message:ty),*]) => {
+    ($(#[$doc:meta])* $group:ident : $super:ident = [$($message:ident),*]) => {
         paste::paste!(
         $(#[$doc])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,7 +65,7 @@ macro_rules! message_group {
         impl $group {
             pub fn identify(buf: &[u8]) -> Option<Self> {
                 $(
-                    if <$message as $crate::protocol::Enliven>::WithLifetime::is_buffer(buf) {
+                    if <meta::$message as $crate::protocol::Enliven>::WithLifetime::is_buffer(buf) {
                         return Some(Self::$message);
                     }
                 )*
@@ -82,7 +82,7 @@ pub(crate) use message_group;
 ///
 /// ```rust
 /// use pgrust::protocol::*;
-/// use pgrust::protocol::messages::*;
+/// use pgrust::protocol::postgres::data::*;
 ///
 /// let buf = [b'?', 0, 0, 0, 4];
 /// match_message!(Message::new(&buf), Backend {
@@ -138,7 +138,10 @@ pub use __match_message as match_message;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{builder, Message, PasswordMessage};
+    use crate::protocol::postgres::{
+        builder,
+        data::{Message, PasswordMessage},
+    };
 
     #[test]
     fn test_match() {

@@ -155,7 +155,8 @@ impl<M: StructLength> StructBuffer<M> {
 #[cfg(test)]
 mod tests {
     use super::StructBuffer;
-    use crate::protocol::{builder, meta, Encoded, Message, ParseError};
+    use crate::protocol::postgres::{builder, data::*, meta};
+    use crate::protocol::*;
 
     /// Create a test data buffer containing three messages
     fn test_data() -> (Vec<u8>, Vec<usize>) {

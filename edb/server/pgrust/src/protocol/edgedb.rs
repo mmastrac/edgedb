@@ -1,41 +1,56 @@
-use self::meta::*;
 use super::gen::protocol;
-use crate::protocol::{meta::*, message_group::message_group};
+use crate::protocol::message_group::message_group;
+message_group!(
+    EdgeDBBackend: Message = [
+        AuthenticationOk,
+        AuthenticationRequiredSASLMessage,
+        AuthenticationSASLContinue,
+        AuthenticationSASLFinal,
+        ServerKeyData,
+        ParameterStatus,
+        ServerHandshake,
+        ReadyForCommand,
+        RestoreReady,
+        CommandComplete,
+        CommandDataDescription,
+        StateDataDescription,
+        Data,
+        DumpHeader,
+        DumpBlock,
+        ErrorResponse,
+        LogMessage
+    ]
+);
 
-// message_group!(
-//     EdgeDBBackend: Message = [
-//         AuthenticationOk,
-//         AuthenticationSASL,
-//         AuthenticationSASLContinue,
-//         AuthenticationSASLFinal,
-//         BackendKeyData,
-//         CommandComplete,
-//         ErrorResponse,
-//         LogMessage,
-//         ParameterStatus,
-//         ReadyForQuery
-//     ]
-// );
-
-// message_group!(
-//     EdgeDBFrontend: Message = [
-//         Bind,
-//         Close,
-//         CopyData,
-//         CopyDone,
-//         CopyFail,
-//         Describe,
-//         Execute,
-//         Flush,
-//         FunctionCall,
-//         Parse,
-//         Query,
-//         Sync,
-//         Terminate
-//     ]
-// );
+message_group!(
+    EdgeDBFrontend: Message = [
+        ClientHandshake,
+        AuthenticationSASLInitialResponse,
+        AuthenticationSASLResponse,
+        Parse,
+        Execute,
+        Sync,
+        Flush,
+        Terminate,
+        Dump,
+        Restore,
+        RestoreBlock,
+        RestoreEof
+    ]
+);
 
 protocol!(
+
+/// A generic base for all EdgeDB mtype/mlen-style messages.
+struct Message {
+    /// Identifies the message.
+    mtype: u8,
+    /// Length of message contents in bytes, including self.
+    mlen: len,
+    /// Message contents.
+    data: Rest,
+}
+
 /// The `ErrorResponse` struct represents an error message sent from the server.
 struct ErrorResponse: Message {
     /// Identifies the message as an error response.
@@ -220,8 +235,8 @@ struct ServerHandshake: Message {
     extensions: Array<i16, ProtocolExtension>,
 }
 
-/// The `AuthenticationOK` struct represents a successful authentication message.
-struct AuthenticationOK: Message {
+/// The `AuthenticationOk` struct represents a successful authentication message.
+struct AuthenticationOk: Message {
     /// Identifies the message as authentication OK.
     mtype: u8 = 'R',
     /// Length of message contents in bytes, including self.

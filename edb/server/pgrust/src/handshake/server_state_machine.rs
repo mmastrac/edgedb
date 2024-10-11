@@ -11,10 +11,9 @@ use crate::{
     },
     handshake::server_auth::{ServerAuthDrive, ServerAuthResponse},
     protocol::{
-        builder,
-        definition::{meta, BackendBuilder},
-        match_message, InitialMessage, Message, ParseError, PasswordMessage, SASLInitialResponse,
-        SASLResponse, SSLRequest, StartupMessage, StructBuffer,
+        match_message,
+        postgres::{data::*, *},
+        ParseError, StructBuffer,
     },
 };
 use std::str::Utf8Error;
@@ -148,9 +147,12 @@ enum ServerStateImpl {
     Error,
 }
 
+#[derive(derive_more::Debug)]
 pub struct ServerState {
     state: ServerStateImpl,
+    #[debug(skip)]
     initial_buffer: StructBuffer<meta::InitialMessage>,
+    #[debug(skip)]
     buffer: StructBuffer<meta::Message>,
 }
 
@@ -367,33 +369,56 @@ impl ServerStateImpl {
                         update.params()?;
                         return Ok(());
                     }
-                    ServerAuthResponse::Error(e) => return Err(e.into()),
-                    _ => return Err(PROTOCOL_ERROR),
+                    ServerAuthResponse::Error(e) => {
+                        error!("Authentication error in initial state: {e:?}");
+                        return Err(e.into());
+                    }
+                    response => {
+                        error!("Unexpected response: {response:?}");
+                        return Err(PROTOCOL_ERROR);
+                    }
                 }
                 *self = Authenticating(auth);
             }
             (Authenticating(auth), ConnectionDrive::Message(message)) => {
+                trace!("auth = {auth:?}, initial = {}", auth.is_initial_message());
                 match_message!(message, Message {
-                    (PasswordMessage as password) => {
-                        match auth.drive(ServerAuthDrive::Message(AuthType::Plain, password.password().to_bytes())) {
+                    (PasswordMessage as password) if matches!(auth.auth_type(), AuthType::Plain | AuthType::Md5) => {
+                        match auth.drive(ServerAuthDrive::Message(auth.auth_type(), password.password().to_bytes())) {
                             ServerAuthResponse::Complete(..) => {
                                 update.send(BackendBuilder::AuthenticationOk(Default::default()))?;
                                 *self = Synchronizing;
                                 update.params()?;
                             }
-                            ServerAuthResponse::Error(e) => return Err(e.into()),
-                            _ => return Err(PROTOCOL_ERROR),
+                            ServerAuthResponse::Error(e) => {
+                                error!("Authentication error for password message: {e:?}");
+                                return Err(e.into())
+                            },
+                            response => {
+                                error!("Unexpected response for password message: {response:?}");
+                                return Err(PROTOCOL_ERROR);
+                            }
                         }
                     },
                     (SASLInitialResponse as sasl) if auth.is_initial_message() => {
+                        if sasl.mechanism() != "SCRAM-SHA-256" {
+                            error!("Unexpected mechanism: {:?}", sasl.mechanism());
+                            return Err(PROTOCOL_ERROR);
+                        }
                         match auth.drive(ServerAuthDrive::Message(AuthType::ScramSha256, sasl.response().as_ref())) {
                             ServerAuthResponse::Continue(final_message) => {
                                 update.send(BackendBuilder::AuthenticationSASLContinue(builder::AuthenticationSASLContinue {
                                     data: &final_message,
                                 }))?;
                             }
-                            ServerAuthResponse::Error(e) => return Err(e.into()),
-                            _ => return Err(PROTOCOL_ERROR),
+                            ServerAuthResponse::Error(e) => {
+                                error!("Authentication error for SASL initial response: {e:?}");
+                                return Err(e.into())
+                            },
+                            response => {
+                                error!("Unexpected response for SASL initial response: {response:?}");
+                                return Err(PROTOCOL_ERROR);
+                            }
                         }
                     },
                     (SASLResponse as sasl) if !auth.is_initial_message() => {
@@ -406,8 +431,14 @@ impl ServerStateImpl {
                                 *self = Synchronizing;
                                 update.params()?;
                             }
-                            ServerAuthResponse::Error(e) => return Err(e.into()),
-                            _ => return Err(PROTOCOL_ERROR),
+                            ServerAuthResponse::Error(e) => {
+                                error!("Authentication error for SASL response: {e:?}");
+                                return Err(e.into())
+                            },
+                            response => {
+                                error!("Unexpected response for SASL response: {response:?}");
+                                return Err(PROTOCOL_ERROR);
+                            }
                         }
                     },
                     unknown => {

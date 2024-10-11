@@ -175,7 +175,8 @@ macro_rules! protocol {
             paste::paste!(
                 pub(crate) mod [<__ $name:lower>] {
                     #[allow(unused_imports)]
-                    use super::*;
+                    use super::meta::*;
+                    use $crate::protocol::meta::*;
                     use $crate::protocol::gen::*;
                     struct_elaborate!(protocol_builder(__struct__) => $( #[ $sdoc ] )* struct $name $(: $super)? { $($struct)+ } );
                     struct_elaborate!(protocol_builder(__meta__) => $( #[ $sdoc ] )* struct $name $(: $super)? { $($struct)+ } );

@@ -1,4 +1,5 @@
 use crate::auth::{AuthType, CredentialData, SCRAMError, ServerTransaction, StoredHash, StoredKey};
+use tracing::error;
 
 #[derive(Debug)]
 pub enum ServerAuthResponse {
@@ -30,6 +31,7 @@ enum ServerAuthState {
     SASL(ServerTransaction, StoredKey),
 }
 
+#[derive(Debug)]
 pub enum ServerAuthDrive<'a> {
     Initial,
     Message(AuthType, &'a [u8]),
@@ -59,6 +61,10 @@ impl ServerAuth {
             ServerAuthState::SASL(tx, _) => tx.initial(),
             _ => true,
         }
+    }
+
+    pub fn auth_type(&self) -> AuthType {
+        self.auth_type
     }
 
     pub fn drive(&mut self, drive: ServerAuthDrive) -> ServerAuthResponse {
@@ -110,17 +116,23 @@ impl ServerAuth {
             (
                 ServerAuthState::SASL(tx, data),
                 ServerAuthDrive::Message(AuthType::ScramSha256, input),
-            ) => match tx.process_message(input, data) {
-                Ok(final_message) => {
-                    if tx.initial() {
-                        ServerAuthResponse::Continue(final_message)
-                    } else {
-                        ServerAuthResponse::Complete(final_message)
+            ) => {
+                let initial = tx.initial();
+                match tx.process_message(input, data) {
+                    Ok(final_message) => {
+                        if initial {
+                            ServerAuthResponse::Continue(final_message)
+                        } else {
+                            ServerAuthResponse::Complete(final_message)
+                        }
                     }
+                    Err(e) => ServerAuthResponse::Error(ServerAuthError::InvalidSaslMessage(e)),
                 }
-                Err(e) => ServerAuthResponse::Error(ServerAuthError::InvalidSaslMessage(e)),
-            },
-            _ => ServerAuthResponse::Error(ServerAuthError::InvalidMessageType),
+            }
+            (_, drive) => {
+                error!("Received invalid drive {drive:?} in state {:?}", self.state);
+                ServerAuthResponse::Error(ServerAuthError::InvalidMessageType)
+            }
         }
     }
 
@@ -153,7 +165,10 @@ impl ServerAuth {
                     CredentialData::Plain(password) => {
                         StoredKey::generate(password.as_bytes(), &salt, 4096)
                     }
-                    _ => StoredKey::generate(b"", &salt, 4096),
+                    CredentialData::Deny => StoredKey::generate(b"", &salt, 4096),
+                    _ => {
+                        return ServerAuthResponse::Error(ServerAuthError::UnsupportedAuthType);
+                    }
                 };
                 let tx = ServerTransaction::default();
                 self.state = ServerAuthState::SASL(tx, scram);

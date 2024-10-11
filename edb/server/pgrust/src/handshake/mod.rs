@@ -10,9 +10,9 @@ pub enum ConnectionSslRequirement {
 }
 
 mod client_state_machine;
+mod edgedb_server;
 mod server_auth;
 mod server_state_machine;
-mod edgedb_server;
 
 pub mod client {
     pub use super::client_state_machine::*;
@@ -33,7 +33,7 @@ mod tests {
         auth::{AuthType, CredentialData},
         connection::Credentials,
         errors::{PgError, PgServerError},
-        protocol::{InitialMessage, Message},
+        protocol::postgres::{data::*, *},
     };
     use rstest::rstest;
     use std::collections::VecDeque;
@@ -65,18 +65,12 @@ mod tests {
     }
 
     impl client::ConnectionStateSend for ConnectionPipe {
-        fn send(
-            &mut self,
-            message: crate::protocol::definition::FrontendBuilder,
-        ) -> Result<(), std::io::Error> {
+        fn send(&mut self, message: FrontendBuilder) -> Result<(), std::io::Error> {
             eprintln!("Client -> Server {message:?}");
             self.smsg.push_back((false, message.to_vec()));
             Ok(())
         }
-        fn send_initial(
-            &mut self,
-            message: crate::protocol::definition::InitialBuilder,
-        ) -> Result<(), std::io::Error> {
+        fn send_initial(&mut self, message: InitialBuilder) -> Result<(), std::io::Error> {
             eprintln!("Client -> Server {message:?}");
             self.smsg.push_back((true, message.to_vec()));
             Ok(())
@@ -105,18 +99,12 @@ mod tests {
             self.sparams = true;
             Ok(())
         }
-        fn send(
-            &mut self,
-            message: crate::protocol::definition::BackendBuilder,
-        ) -> Result<(), std::io::Error> {
+        fn send(&mut self, message: BackendBuilder) -> Result<(), std::io::Error> {
             eprintln!("Server -> Client {message:?}");
             self.cmsg.push_back((false, message.to_vec()));
             Ok(())
         }
-        fn send_ssl(
-            &mut self,
-            message: crate::protocol::builder::SSLResponse,
-        ) -> Result<(), std::io::Error> {
+        fn send_ssl(&mut self, message: builder::SSLResponse) -> Result<(), std::io::Error> {
             self.cmsg.push_back((true, message.to_vec()));
             Ok(())
         }
@@ -256,7 +244,12 @@ mod tests {
         }
 
         if expect_success {
-            assert!(client.is_ready() && server.is_ready())
+            assert!(
+                client.is_ready() && server.is_ready(),
+                "client={:?} server={:?}",
+                client,
+                server
+            );
         } else {
             assert!(client_error && server_error);
             assert!(pipe.cerror.is_some() && pipe.serror.is_some());

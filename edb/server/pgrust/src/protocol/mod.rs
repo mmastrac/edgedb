@@ -1,32 +1,16 @@
 mod arrays;
 mod buffer;
 mod datatypes;
-pub(crate) mod definition;
-pub(crate) mod edgedb;
+pub mod edgedb;
 mod gen;
 mod message_group;
+pub mod postgres;
 mod writer;
 
 /// Metatypes for the protocol and related arrays/strings.
 pub mod meta {
     pub use super::arrays::meta::*;
     pub use super::datatypes::meta::*;
-    pub use super::definition::meta::*;
-}
-
-/// Measurement structs.
-pub mod measure {
-    pub use super::definition::measure::*;
-}
-
-/// Builder structs.
-pub mod builder {
-    pub use super::definition::builder::*;
-}
-
-/// Message types collections.
-pub mod messages {
-    pub use super::definition::{Backend, Frontend, Initial};
 }
 
 #[allow(unused)]
@@ -34,8 +18,6 @@ pub use arrays::{Array, ArrayIter, ZTArray, ZTArrayIter};
 pub use buffer::StructBuffer;
 #[allow(unused)]
 pub use datatypes::{Encoded, LString, Rest, ZTString};
-#[allow(unused)]
-pub use definition::data::*;
 pub use message_group::match_message;
 pub use writer::BufWriter;
 
@@ -181,7 +163,7 @@ pub(crate) use field_access;
 mod tests {
     use super::*;
     use buffer::StructBuffer;
-    use definition::builder;
+    use postgres::{builder, data::*, measure, meta};
     use rand::Rng;
     /// We want to ensure that no malformed messages will cause unexpected
     /// panics, so we try all sorts of combinations of message mutation to
