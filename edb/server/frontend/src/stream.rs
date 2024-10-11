@@ -7,20 +7,26 @@ use core::str;
 use hyper::{HeaderMap, Version};
 use openssl::{ssl::NameType, x509::X509};
 use std::{
-    io::{ErrorKind, IoSlice},
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
+    collections::HashMap, io::{ErrorKind, IoSlice}, pin::Pin, sync::Arc, task::{Context, Poll}
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{unix::UCred, TcpStream, UnixStream},
 };
+use tracing::error;
 
 macro_rules! stream_properties {
     (
         $(#[doc=$doc:literal] pub $name:ident: $type:ty),+ $(,)?
     ) => {
+        #[derive(Clone, Default, Debug)]
+        pub struct StreamPropertiesBuilder {
+            $(
+                #[doc=$doc]
+                pub $name: $type,
+            )+
+        }
+
         pub struct StreamProperties {
             /// A parent transport, if one exists
             pub parent: Option<Arc<StreamProperties>>,
@@ -39,6 +45,15 @@ macro_rules! stream_properties {
                     transport,
                     $($name: None),+
                 }
+            }
+
+            pub fn upgrade(self: Arc<Self>, props: StreamPropertiesBuilder) -> Arc<Self> {
+                let transport = self.transport;
+                Arc::new(StreamProperties {
+                    parent: Some(self),
+                    transport,
+                    $($name: props.$name),+
+                })
             }
 
             $(
@@ -81,6 +96,8 @@ stream_properties! {
     pub http_version: Option<Version>,
     /// The HTTP request headers (for HTTP connections)
     pub request_headers: Option<HeaderMap>,
+    /// The stream parameters (for PG/EDB connections)
+    pub stream_params: Option<HashMap<String, String>>,
     /// The peer's SSL certificate (for SSL connections)
     pub peer_certificate: Option<X509>,
     /// The SSL/TLS version.
@@ -262,6 +279,15 @@ impl ListenerStream {
         }
     }
 
+    /// If this channel allows for non-blocking write attempts, give it a shot to avoid polling.
+    pub fn try_write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
+        match &mut self.inner {
+            ListenerStreamInner::Tcp(stream) => stream.inner.try_write(buf),
+            ListenerStreamInner::Unix(stream) => stream.inner.try_write(buf),
+            _ => Ok(0),
+        }
+    }
+
     pub fn rewind(&mut self, buffer: &[u8]) {
         match &mut self.inner {
             ListenerStreamInner::Tcp(stream) => stream.rewind(buffer),
@@ -283,7 +309,7 @@ impl ListenerStream {
                 } else {
                     ssl.connect().await
                 }
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                .map_err(|e| { error!("{:?} {:?}", e.io_error(), e.ssl_error()); std::io::Error::new(std::io::ErrorKind::InvalidData, e)})?;
 
                 let ssl = ssl_stream.ssl();
                 let stream_properties = StreamProperties {
@@ -348,6 +374,13 @@ impl ListenerStream {
     /// Returns the peer address of the underlying stream.
     pub fn peer_addr(&self) -> Option<&ListenerAddress> {
         self.stream_properties.local_addr.as_ref()
+    }
+    
+    pub fn upgrade(self, props: StreamPropertiesBuilder) -> Self {
+        Self {
+            inner: self.inner,
+            stream_properties: self.stream_properties.upgrade(props)
+        }
     }
 }
 

@@ -142,6 +142,14 @@ impl<M: StructLength> StructBuffer<M> {
     pub fn into_inner(self) -> VecDeque<u8> {
         self.accum
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.accum.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.accum.len()
+    }
 }
 
 #[cfg(test)]

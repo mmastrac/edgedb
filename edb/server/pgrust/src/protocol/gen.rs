@@ -732,7 +732,7 @@ mod tests {
         protocol!(
             struct HasLString {
                 s: LString,
-            }  
+            }
         );
     }
 

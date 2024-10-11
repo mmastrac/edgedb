@@ -28,6 +28,14 @@ macro_rules! message_group {
                     )*
                 }
             }
+
+            pub fn copy_to_buf(&self, writer: &mut $crate::protocol::writer::BufWriter) {
+                match self {
+                    $(
+                        Self::$message(message) => message.copy_to_buf(writer),
+                    )*
+                }
+            }
         }
 
         $(

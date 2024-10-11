@@ -1,24 +1,33 @@
 #![doc = "../README.md"]
 
 use crate::{
-    config::{ListenerAddress, SslConfig},
+    config::ListenerAddress,
     hyper::HyperUpgradedStream,
     service::{
-        AuthResult, AuthTarget, BabelfishService, BranchDB, ConnectionIdentityBuilder,
-        StreamLanguage,
+        AuthTarget, BabelfishService, BranchDB, ConnectionIdentityBuilder, StreamLanguage
     },
-    stream::{ListenerStream, StreamProperties, TransportType},
+    stream::{ListenerStream, StreamProperties, StreamPropertiesBuilder, TransportType},
     stream_type::{
-        identify_stream, negotiate_alpn, negotiate_ws_protocol, PostgresInitialMessage, StreamType,
-        UnknownStreamType,
+        identify_stream, negotiate_alpn, negotiate_ws_protocol, PostgresInitialMessage,
+        StreamState, StreamType, UnknownStreamType,
     },
 };
 use futures::StreamExt;
-use hyper::{upgrade::OnUpgrade, Request, Response, StatusCode, Version};
+use hyper::{upgrade::OnUpgrade, Request, Response, StatusCode};
 use openssl::ssl::{AlpnError, NameType, SniError, Ssl, SslAlert, SslContext, SslMethod};
-use pgrust::protocol::InitialMessage;
+use pgrust::{errors::{PgError, PgErrorConnectionException, PgErrorInvalidAuthorizationSpecification}, 
+    handshake::{
+        server::{ConnectionDrive, ConnectionEvent, ServerState},
+        ConnectionSslRequirement,
+    }}
+;
 use scopeguard::defer;
-use std::sync::OnceLock;
+use std::
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        OnceLock,
+    }
+;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -215,7 +224,7 @@ async fn handle_ws_upgrade(
     identity: ConnectionIdentityBuilder,
     bound_config: impl IsBoundConfig,
 ) -> Result<(), std::io::Error> {
-    handle_connection_inner(stream, identity, bound_config).await
+    handle_connection_inner(StreamState::Encapsulated, stream, identity, bound_config).await
 }
 
 struct HttpService<T: IsBoundConfig> {
@@ -297,11 +306,13 @@ impl<T: IsBoundConfig> hyper::service::Service<Request<hyper::body::Incoming>> f
 
 /// Handles a connection from the listener. This method will not return until the connection is closed.
 async fn handle_connection_inner(
+    state: StreamState,
     mut socket: ListenerStream,
     identity: ConnectionIdentityBuilder,
     bound_config: impl IsBoundConfig,
 ) -> Result<(), std::io::Error> {
-    let res = identify_stream(&mut socket).await;
+    trace!("handle_connection_inner state={state:?} {socket:?}");
+    let res = identify_stream(state, &mut socket).await;
     let stream_type = match res {
         Ok(stream_type) => stream_type,
         Err(unknown_type) => return handle_stream_unknown(unknown_type, socket).await,
@@ -358,7 +369,7 @@ async fn handle_stream_edgedb_binary(
     let length = u32::from_be_bytes(length_bytes) - 4;
     let mut handshake = vec![0; length as usize];
     socket.read_exact(&mut handshake).await?;
-    println!("Handshake: {:?}", handshake);
+    println!("Handshake:\n{:?}", hexdump::hexdump(&handshake));
     _ = socket
         .write_all(StreamType::EdgeDBBinary.go_away_message())
         .await;
@@ -413,7 +424,13 @@ async fn handle_stream_ssltls(
         },
     );
     let ssl_socket = socket.start_ssl(ssl).await?;
-    Box::pin(handle_connection_inner(ssl_socket, identity, bound_config)).await
+    Box::pin(handle_connection_inner(
+        StreamState::Ssl,
+        ssl_socket,
+        identity,
+        bound_config,
+    ))
+    .await
 }
 
 async fn handle_stream_postgres_ssl(
@@ -421,8 +438,8 @@ async fn handle_stream_postgres_ssl(
     identity: ConnectionIdentityBuilder,
     bound_config: impl IsBoundConfig,
 ) -> Result<(), std::io::Error> {
-    let mut rewind = [0_u8; 8];
-    socket.read_exact(&mut rewind).await?;
+    let mut buf = [0; 8];
+    socket.read_exact(&mut buf).await;
 
     // Postgres checks to see if the socket is readable and fails here
     let mut peek = [0; 1];
@@ -442,14 +459,34 @@ async fn handle_stream_postgres_ssl(
         socket.props(),
     ) {
         socket.write_all(b"N").await?;
-        return Box::pin(handle_connection_inner(socket, identity, bound_config)).await;
+        return Box::pin(handle_connection_inner(
+            StreamState::PgSslUpgrade,
+            socket,
+            identity,
+            bound_config,
+        ))
+        .await;
     }
 
     eprintln!("Booting postgres SSL");
     socket.write_all(b"S").await?;
-    let ssl = bound_config.ssl()?;
+    let mut ssl = bound_config.ssl()?;
+    ssl.set_ex_data(
+        get_ssl_ex_data_index(),
+        SSLExData {
+            identity: identity.clone(),
+            stream_props: socket.props_clone(),
+        },
+    );
+
     let ssl_socket = socket.start_ssl(ssl).await?;
-    Box::pin(handle_connection_inner(ssl_socket, identity, bound_config)).await
+    Box::pin(handle_connection_inner(
+        StreamState::PgSslUpgrade,
+        ssl_socket,
+        identity,
+        bound_config,
+    ))
+    .await
 }
 
 async fn handle_stream_postgres_initial(
@@ -461,68 +498,94 @@ async fn handle_stream_postgres_initial(
         match_message, messages::Initial, meta::InitialMessage, StartupMessage, StructBuffer,
     };
 
-    let mut buf = StructBuffer::<InitialMessage>::default();
-    let mut done = false;
+    // We'll handle SSL upgrades here
+    let mut resolved_identity = None;
+    let mut server_state = ServerState::new(ConnectionSslRequirement::Disable);
     let mut startup_params = HashMap::with_capacity(16);
-    while !done {
-        let mut b = [0; 512];
-        let n = socket.read(&mut b).await?;
-        if n == 0 {
-            return Err(ErrorKind::UnexpectedEof.into());
+    let mut send_buf = Mutex::new(bytes::BytesMut::new());
+    let auth_ready = AtomicBool::new(false);
+    let params_ready = AtomicBool::new(false);
+    let mut update = |update: ConnectionEvent<'_>| {
+        use ConnectionEvent::*;
+        trace!("UPDATE: {update:?}");
+        match update {
+            Auth(user, database) => {
+                identity.set_branch(BranchDB::Branch(database));
+                identity.set_user(user);
+                auth_ready.store(true, Ordering::SeqCst);
+            }
+            Parameter(name, value) => {
+                startup_params.insert(name.to_owned(), value.to_owned());
+            }
+            Params => params_ready.store(true, Ordering::SeqCst),
+            Send(bytes) => {
+                // TODO: Reduce copies and allocations here
+                send_buf.lock().unwrap().extend_from_slice(&bytes.to_vec());
+            }
+            SendSSL(..) => unreachable!(),
+            ServerError(e) => {
+                trace!("ERROR {e:?}");
+            }
+            StateChanged(..) => {}
+            Upgrade => unreachable!(),
         }
-        buf.push_fallible(&b[..n], |msg| {
-            match_message!(msg, Initial {
-                (StartupMessage as startup) => {
-                    for param in startup.params() {
-                        if param.name() == "database" {
-                            let db = param.value().to_str().map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "Invalid database name"))?.to_owned();
-                            identity.set_branch(BranchDB::Branch(db));
-                        } else if param.name() == "username" {
-                            let username = param.value().to_str().map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "Invalid username"))?.to_owned();
-                            identity.set_user(username);
-                        } else {
-                            let name = param.name().to_str().map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "Invalid startup parameter"))?.to_owned();
-                            let value = param.value().to_str().map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "Invalid startup parameter"))?.to_owned();
-                            if startup_params.contains_key(&name) {
-                                return Err(std::io::Error::new(ErrorKind::InvalidData, "Invalid startup parameter"));
-                            }
-                            startup_params.insert(name, value);
-                        }
-                    }
-                    done = true;
-                },
-                message => {
-                    return Err(std::io::Error::new(ErrorKind::InvalidData, "Unexpected message"));
+        Ok(())
+    };
+
+    while !server_state.is_done() {
+        let mut send_buf = std::mem::take(&mut *send_buf.lock().unwrap());
+            if !send_buf.is_empty() {
+                eprintln!("Sending {send_buf:?}");
+                socket.write_all(&send_buf).await?;
+            }
+         else if auth_ready.swap(false, Ordering::SeqCst) {
+            let built = match identity.clone().build() {
+                Ok(built) => built,
+                Err(e) => {
+                    server_state.drive(ConnectionDrive::Fail(PgError::InvalidAuthorizationSpecification(PgErrorInvalidAuthorizationSpecification::InvalidAuthorizationSpecification), "Missing database or user"), &mut update).unwrap();
+                    return Ok(())
                 }
-            });
-            Ok(())
-        })?;
+            };
+            resolved_identity = Some(built);
+            let auth = bound_config
+                .service()
+                .lookup_auth(
+                    resolved_identity.clone().unwrap(),
+                    AuthTarget::Stream(StreamLanguage::Postgres),
+                )
+                .await?;
+            server_state
+            .drive(
+                ConnectionDrive::AuthInfo(auth.auth_type(), auth),
+                &mut update,
+            )
+            .unwrap();
+        } else if params_ready.swap(false, Ordering::SeqCst) {
+            server_state
+                .drive(ConnectionDrive::Ready(1, 2), &mut update)
+                .unwrap();
+        } else {
+            let mut b = [0; 512];
+            let n = socket.read(&mut b).await?;
+            if n == 0 {
+                // EOF
+                return Ok(());
+            }
+            let res = server_state.drive(ConnectionDrive::RawMessage(&b[..n]), &mut update);
+            if res.is_err() {
+                // TODO?
+                error!("{res:?}");
+                return Ok(());
+            }
+        }
     }
 
-    let bytes = buf.into_inner();
+    let socket = socket.upgrade(StreamPropertiesBuilder {
+        stream_params: Some(startup_params),
+        ..Default::default()
+    });
+    bound_config.service().accept_stream(resolved_identity.unwrap(), StreamLanguage::Postgres, socket).await;
 
-    // Do some auth
-    let auth = bound_config
-        .service()
-        .lookup_auth(
-            identity.build(),
-            AuthTarget::Stream(StreamLanguage::Postgres),
-        )
-        .await?;
-    match auth {
-        AuthResult::Trust => {}
-        AuthResult::MTLS => {}
-        AuthResult::Deny => {}
-        AuthResult::MD5(..) => {}
-        AuthResult::ScramSHA256(..) => {}
-    }
-
-    _ = socket
-        .write_all(
-            StreamType::PostgresInitial(PostgresInitialMessage::StartupMessage).go_away_message(),
-        )
-        .await;
-    _ = socket.shutdown().await;
     Ok(())
 }
 
@@ -607,7 +670,11 @@ impl BoundServer {
             {
                 return;
             }
-            tokio::task::spawn(async move { handle_connection_inner(stm, identity, config).await });
+            tokio::task::spawn(async move {
+                if let Err(e) = handle_connection_inner(StreamState::Raw, stm, identity, config).await {
+                    error!("Connection error: {e:?}");
+                }
+            });
         }));
         Ok(Self {
             task,
@@ -652,8 +719,9 @@ fn create_ssl_for_listener_config(
             let stream_props = ex_data.stream_props.clone();
             let ssl_new = ssl_new.maybe_configure(move |ctx| {
                 ctx.set_alpn_select_callback(move |_, alpn| {
-                    trace!("Server ALPN callback: {:?}", alpn);
+                    trace!("Server ALPN callback: {:?} ({:?})", std::str::from_utf8(alpn), alpn);
                     let protocol = negotiate_alpn(config.as_ref(), alpn, &stream_props);
+                    trace!("Negotiated: {protocol:?}");
                     if !alpn.is_empty() && protocol.is_none() {
                         return Err(AlpnError::ALERT_FATAL);
                     }
@@ -788,11 +856,12 @@ mod tests {
     use hyper::Uri;
     use hyper_util::rt::TokioIo;
     use openssl::ssl::{Ssl, SslContext, SslMethod};
+    use pgrust::handshake::server::CredentialData;
     use rstest::rstest;
 
     use crate::{
         config::TestListenerConfig,
-        service::{AuthResult, AuthTarget, ConnectionIdentity, StreamLanguage},
+        service::{AuthTarget, ConnectionIdentity, StreamLanguage},
     };
 
     use super::*;
@@ -852,9 +921,9 @@ mod tests {
             &self,
             identity: ConnectionIdentity,
             target: AuthTarget,
-        ) -> impl Future<Output = Result<AuthResult, std::io::Error>> {
+        ) -> impl Future<Output = Result<CredentialData, std::io::Error>> {
             self.log(format!("lookup_auth: {:?}", identity));
-            async { Ok(Default::default()) }
+            async { Ok(CredentialData::Deny) }
         }
 
         fn accept_stream(

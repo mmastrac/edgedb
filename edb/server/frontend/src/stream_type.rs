@@ -22,6 +22,18 @@ pub enum PostgresInitialMessage {
     Cancellation,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum StreamState {
+    /// A stream that is in the raw state.
+    Raw,
+    /// A stream that began in SSL.
+    Ssl,
+    /// A stream that has gone through the Postgres SSL upgrade handshake (whether successful or not).
+    PgSslUpgrade,
+    /// A stream encapsulated within another stream (ie: WebSocket/HTTP)
+    Encapsulated,
+}
+
 /// Represents the different types of streams that can be identified.
 #[derive(Clone, Copy, Debug)]
 pub enum StreamType {
@@ -109,10 +121,10 @@ const fn is_likely_http1(a1: u8, a2: u8, a3: u8, a4: u8) -> bool {
 }
 
 const fn identify_connection(
-    is_ssl: bool,
+    state: StreamState,
     buf: &[u8; PREFACE_SIZE],
 ) -> Result<StreamType, UnknownStreamType> {
-    match (is_ssl, buf) {
+    match (state, buf) {
         // Legacy Postgres wire protocol (Network order length = 296, major version = 2)
         // Example connection from PostgreSQL 7.x:
         // 00000000  00 00 01 28 00 02 00 00  6d 61 74 74 00 00 00 00  |...(....matt....|
@@ -122,16 +134,16 @@ const fn identify_connection(
         // Example connection from openssl 1.0.2k with `-ssl2`:
         // 00000000  80 25 01 00 02 00 0c 00  00 00 10 05 00 80 03 00  |.%..............|
         // 00000010  80 01 00 80 07 00 c0 37  9b dc 4b 94 2c ba 14 57  |.......7..K.,..W|
-        (false, [b0, b1, 0x01, ..]) if (*b0 & 0x80 == 0x80) && (((*b0 as u16 & 0x7f) << 8 | *b1 as u16) > 9) => Err(UnknownStreamType::SSLLegacy),
+        (StreamState::Raw, [b0, b1, 0x01, ..]) if (*b0 & 0x80 == 0x80) && (((*b0 as u16 & 0x7f) << 8 | *b1 as u16) > 9) => Err(UnknownStreamType::SSLLegacy),
 
         // Postgres wire protocol: Startup message with length 13 or more, protocol = 0x30000
         (_, [0, 0, len_hi, len_lo, 0, 3, 0, 0]) if u32::from_be_bytes([0, 0, *len_hi, *len_lo]) >= 13 => Ok(StreamType::PostgresInitial(PostgresInitialMessage::StartupMessage)),
 
         // Postgres SSLRequest startup message (length 8, code 0x4d2162f)
-        (false, [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]) => Ok(StreamType::PostgresInitial(PostgresInitialMessage::SSLRequest)),
+        (StreamState::Raw, [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]) => Ok(StreamType::PostgresInitial(PostgresInitialMessage::SSLRequest)),
 
         // Postgres GSSENCRequest startup message (length 8, code 0x4d21630)
-        (false, [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x30]) => Ok(StreamType::PostgresInitial(PostgresInitialMessage::GSSENCRequest)),
+        (_, [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x30]) => Ok(StreamType::PostgresInitial(PostgresInitialMessage::GSSENCRequest)),
 
         // Other Postgres startup message (length 8 or 16, code 0x4d2....)
         (_, [0, 0, 0, 8 | 16, 0x04, 0xd2, _, _]) => Ok(StreamType::PostgresInitial(PostgresInitialMessage::Cancellation)),
@@ -140,18 +152,18 @@ const fn identify_connection(
         (_, [0, 0, _, _, 0x04, 0xd2, 0x16, _]) => Err(UnknownStreamType::PostgresInitial),
 
         // SSL 3.0 or TLS 1.0+: Record type 0x16 (Handshake), Version 3.0 or higher
-        (false, [0x16, 0x03, _, _, _, 0x01, ..]) => Ok(StreamType::SSLTLS),
+        (StreamState::Raw, [0x16, 0x03, _, _, _, 0x01, ..]) => Ok(StreamType::SSLTLS),
 
         // EdgeDB binary protocol (ClientHandshake): 'V' followed by 7 bytes (including length)
-        (_, [b'V', 0, 0, 0, _, _, _, _]) => Ok(StreamType::EdgeDBBinary),
+        (StreamState::Raw | StreamState::Ssl | StreamState::Encapsulated, [b'V', 0, 0, 0, _, _, _, _]) => Ok(StreamType::EdgeDBBinary),
 
         // HTTP/2: Connection Preface
-        (_, &HTTP_2_PREFACE) => Ok(StreamType::HTTP2),
+        (StreamState::Raw | StreamState::Ssl, &HTTP_2_PREFACE) => Ok(StreamType::HTTP2),
 
         // HTTP/1.x: Various HTTP methods
 
         // GET /<*>
-        (_, [b'G', b'E', b'T', b' ', b'/', ..] |
+        (StreamState::Raw | StreamState::Ssl, [b'G', b'E', b'T', b' ', b'/', ..] |
         // POST /<*>
         [b'P', b'O', b'S', b'T', b' ', b'/', ..] |
         // PUT /<*>
@@ -170,7 +182,7 @@ const fn identify_connection(
         [b'C', b'O', b'N', b'N', b'E', b'C', b'T', b' ']) => Ok(StreamType::HTTP1x),
         // Other less common HTTP methods, assume HTTP/1.x if the first
         // four bytes look like an HTTP method
-        (_, [a1, a2, a3, a4, ..]) if is_likely_http1(*a1, *a2, *a3, *a4) => Ok(StreamType::HTTP1x),
+        (StreamState::Raw | StreamState::Ssl, [a1, a2, a3, a4, ..]) if is_likely_http1(*a1, *a2, *a3, *a4) => Ok(StreamType::HTTP1x),
 
         // Unknown protocol
         _ => Err(UnknownStreamType::Unknown),
@@ -321,7 +333,10 @@ pub fn known_protocol(alpn: &[u8]) -> Option<&'static str> {
 
 /// Identifies the stream type based on the initial bytes read from the socket or ALPN protocol.
 /// This function correctly rewinds the stream if needed.
-pub async fn identify_stream(socket: &mut ListenerStream) -> Result<StreamType, UnknownStreamType> {
+pub async fn identify_stream(
+    state: StreamState,
+    socket: &mut ListenerStream,
+) -> Result<StreamType, UnknownStreamType> {
     // If we have a negotiated ALPN/websocket type, we don't need to sniff the stream
     if let Some(alpn) = socket.selected_protocol() {
         let res = identify_alpn(alpn.as_bytes());
@@ -359,7 +374,7 @@ pub async fn identify_stream(socket: &mut ListenerStream) -> Result<StreamType, 
     socket.rewind(&preface[..read]);
 
     // Identify the connection
-    let res = identify_connection(false, &preface);
+    let res = identify_connection(state, &preface);
     trace!(
         "Identified connection via preface: {:?} -> {res:?}",
         &preface[..read]

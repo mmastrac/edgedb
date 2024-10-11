@@ -33,10 +33,11 @@ pub mod messages {
 pub use arrays::{Array, ArrayIter, ZTArray, ZTArrayIter};
 pub use buffer::StructBuffer;
 #[allow(unused)]
-pub use datatypes::{Encoded, Rest, ZTString, LString};
+pub use datatypes::{Encoded, LString, Rest, ZTString};
 #[allow(unused)]
 pub use definition::data::*;
 pub use message_group::match_message;
+pub use writer::BufWriter;
 
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseError {

@@ -1,3 +1,5 @@
+use pgrust::handshake::server::CredentialData;
+
 use crate::stream::ListenerStream;
 use std::{
     future::Future,
@@ -23,69 +25,81 @@ pub enum BranchDB {
     DB(String),
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum IdentityError {
+    #[error("No user specified")]
+    NoUser,
+    #[error("No database specified")]
+    NoDb,
+}
+
 #[derive(Clone, Debug)]
 pub struct ConnectionIdentityBuilder {
-    identity: Arc<Mutex<ConnectionIdentity>>,
+    tenant: Arc<Mutex<Option<String>>>,
+    db: Arc<Mutex<Option<BranchDB>>>,
+    user: Arc<Mutex<Option<String>>>,
 }
 
 impl ConnectionIdentityBuilder {
     pub fn new() -> Self {
         Self {
-            identity: Arc::new(Mutex::new(ConnectionIdentity {
-                tenant: None,
-                branch: None,
-                user: None,
-            })),
+            tenant: Arc::new(Mutex::new(None)),
+            db: Arc::new(Mutex::new(None)),
+            user: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_tenant(&self, tenant: String) -> &Self {
-        let mut identity = self.identity.lock().unwrap();
-        identity.tenant = Some(tenant);
+        *self.tenant.lock().unwrap() = Some(tenant);
         self
     }
 
     pub fn set_branch(&self, branch: BranchDB) -> &Self {
-        let mut identity = self.identity.lock().unwrap();
-        identity.branch = Some(branch);
+        *self.db.lock().unwrap() = Some(branch);
         self
     }
 
     pub fn set_user(&self, user: String) -> &Self {
-        let mut identity = self.identity.lock().unwrap();
-        identity.user = Some(user);
+        *self.user.lock().unwrap() = Some(user);
         self
     }
 
+    /// Create a new, disconnected builder.
     pub fn new_builder(&self) -> Self {
         Self {
-            identity: Arc::new(Mutex::new(self.identity.lock().unwrap().clone())),
+            tenant: Arc::new(Mutex::new(self.tenant.lock().unwrap().clone())),
+            db: Arc::new(Mutex::new(self.db.lock().unwrap().clone())),
+            user: Arc::new(Mutex::new(self.user.lock().unwrap().clone())),
         }
     }
 
-    pub fn build(self) -> ConnectionIdentity {
-        match Arc::try_unwrap(self.identity) {
+    fn unwrap_or_clone<T: Clone>(arc: Arc<Mutex<T>>) -> T {
+        match Arc::try_unwrap(arc) {
             Ok(mutex) => mutex.into_inner().unwrap(),
             Err(arc) => arc.lock().unwrap().clone(),
         }
+    }
+
+    pub fn build(self) -> Result<ConnectionIdentity, IdentityError> {
+        let tenant = Self::unwrap_or_clone(self.tenant);
+        let db = Self::unwrap_or_clone(self.db)
+            .ok_or(IdentityError::NoDb)?;
+        let user = Self::unwrap_or_clone(self.user)
+            .ok_or(IdentityError::NoUser)?;
+
+        Ok(ConnectionIdentity {
+            tenant,
+            db,
+            user,
+        })
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ConnectionIdentity {
-    tenant: Option<String>,
-    branch: Option<BranchDB>,
-    user: Option<String>,
-}
-
-#[derive(Default)]
-pub enum AuthResult {
-    #[default]
-    Deny,
-    Trust,
-    MD5(String),
-    ScramSHA256(String),
-    MTLS,
+    pub tenant: Option<String>,
+    pub db: BranchDB,
+    pub user: String,
 }
 
 /// Handles incoming connections from the listener which might be streams or HTTP.
@@ -94,13 +108,13 @@ pub trait BabelfishService: std::fmt::Debug + Send + Sync + 'static {
         &self,
         identity: ConnectionIdentity,
         target: AuthTarget,
-    ) -> impl Future<Output = Result<AuthResult, std::io::Error>> + Send + Sync;
+    ) -> impl Future<Output = Result<CredentialData, std::io::Error>> + Send + Sync;
     fn accept_stream(
         &self,
         identity: ConnectionIdentity,
         language: StreamLanguage,
         stream: ListenerStream,
-    ) -> impl Future<Output = Result<(), std::io::Error>>;
+    ) -> impl Future<Output = Result<(), std::io::Error>> + Send;
     fn accept_http(
         &self,
         identity: ConnectionIdentity,

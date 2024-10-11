@@ -2,7 +2,7 @@ use futures::{stream, Stream, StreamExt};
 use std::{
     hash::Hash,
     net::{SocketAddr, ToSocketAddrs},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tracing::trace;
@@ -178,11 +178,19 @@ impl ListenerConfig for TestListenerConfig {
     }
 
     fn ssl_config_sni(&self, hostname: Option<&str>) -> Result<(SslConfig, Option<String>), ()> {
+        use std::path::PathBuf;
+
+        let package_root = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR not set");
+        let cert_path = Path::new(&package_root)
+            .join("../../../tests/certs/server.cert.pem");
+        let key_path = Path::new(&package_root)
+            .join("../../../tests/certs/server.key.pem");
+
+        let ssl_config = SslConfig::new(cert_path, key_path);
+
         Ok((
-            SslConfig::new(
-                "../../../tests/certs/server.cert.pem".into(),
-                "../../../tests/certs/server.key.pem".into(),
-            ),
+            ssl_config,
             None,
         ))
     }

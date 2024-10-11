@@ -1,6 +1,6 @@
+use self::meta::*;
 use super::gen::protocol;
 use crate::protocol::meta::*;
-use self::meta::*;
 
 protocol!(
 /// The `ErrorResponse` struct represents an error message sent from the server.

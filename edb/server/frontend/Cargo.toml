@@ -26,6 +26,9 @@ derive_more = { version = "1", features = ["full"] }
 sha1 = "0.10.6"
 base64 = "0.22.1"
 jwt = { version = "0.16", features = ["openssl"] }
+bytes = "1"
+thiserror = "1"
+hexdump = "0"
 
 tracing = "0"
 tracing-subscriber = "0"

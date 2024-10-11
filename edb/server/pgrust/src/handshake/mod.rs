@@ -39,6 +39,7 @@ pub enum AuthType {
 
 mod client_state_machine;
 mod server_state_machine;
+mod server_auth;
 
 pub mod client {
     pub use super::client_state_machine::*;
@@ -182,8 +183,7 @@ mod tests {
             },
             ConnectionSslRequirement::Disable,
         );
-        let mut server =
-            server::ServerState::new(ConnectionSslRequirement::Disable, 0x1234, 0x4321);
+        let mut server = server::ServerState::new(ConnectionSslRequirement::Disable);
 
         // We test all variations here, but not all combinations will result in
         // valid auth, even with a correct password.
@@ -231,7 +231,7 @@ mod tests {
                 };
                 let data = CredentialData::new(credential_type, user.clone(), password);
                 server_error |= server
-                    .drive(ConnectionDrive::AuthInfo(user, auth_type, data), &mut pipe)
+                    .drive(ConnectionDrive::AuthInfo(auth_type, data), &mut pipe)
                     .is_err();
             }
             if pipe.sparams {
@@ -247,7 +247,9 @@ mod tests {
                         &mut pipe,
                     )
                     .is_err();
-                server_error |= server.drive(ConnectionDrive::Ready, &mut pipe).is_err();
+                server_error |= server
+                    .drive(ConnectionDrive::Ready(1234, 4567), &mut pipe)
+                    .is_err();
             }
             while let Some((initial, msg)) = pipe.smsg.pop_front() {
                 if initial {

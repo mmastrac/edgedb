@@ -11,11 +11,11 @@ use super::{
 
 pub mod meta {
     pub use super::EncodedMeta as Encoded;
+    pub use super::LStringMeta as LString;
     pub use super::LengthMeta as Length;
     pub use super::RestMeta as Rest;
-    pub use super::ZTStringMeta as ZTString;
-    pub use super::LStringMeta as LString;
     pub use super::UuidMeta as Uuid;
+    pub use super::ZTStringMeta as ZTString;
 }
 
 /// Represents the remainder of data in a message.
@@ -205,7 +205,6 @@ impl FieldAccess<ZTStringMeta> {
     }
 }
 
-
 /// A length-prefixed string.
 #[allow(unused)]
 pub struct LString<'a> {
@@ -300,7 +299,9 @@ impl FieldAccess<LStringMeta> {
         if buf.len() < 4 + len {
             return Err(ParseError::TooShort);
         }
-        Ok(LString { buf: buf.split_at(4).1 })
+        Ok(LString {
+            buf: buf.split_at(4).1,
+        })
     }
     #[inline(always)]
     pub const fn measure(buf: &str) -> usize {
@@ -319,7 +320,6 @@ impl FieldAccess<LStringMeta> {
         buf.write(value.as_bytes());
     }
 }
-
 
 field_access!(UuidMeta);
 array_access!(UuidMeta);
@@ -376,7 +376,6 @@ impl FieldAccess<UuidMeta> {
         buf.write(&value.as_bytes().as_slice());
     }
 }
-
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 /// An encoded row value.

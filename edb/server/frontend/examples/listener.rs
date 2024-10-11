@@ -6,6 +6,10 @@ use edb_frontend::service::*;
 use edb_frontend::stream::*;
 use hyper::Response;
 use openssl::ssl::{SslContext, SslMethod};
+use pgrust::auth::StoredHash;
+use pgrust::handshake::server::CredentialData;
+use tokio::io::AsyncReadExt;
+use tokio::io::ReadBuf;
 
 #[derive(Clone, Debug, Default)]
 struct ExampleService {}
@@ -15,22 +19,33 @@ impl BabelfishService for ExampleService {
         &self,
         identity: ConnectionIdentity,
         target: AuthTarget,
-    ) -> impl Future<Output = Result<AuthResult, std::io::Error>> {
+    ) -> impl Future<Output = Result<CredentialData, std::io::Error>> {
         eprintln!("lookup_auth: {:?}", identity);
-        async { Ok(Default::default()) }
+        async move {
+            Ok(CredentialData::Md5(StoredHash::generate(
+                b"password",
+                &identity.user,
+            )))
+        }
     }
 
     fn accept_stream(
         &self,
         identity: ConnectionIdentity,
         language: StreamLanguage,
-        stream: ListenerStream,
+        mut stream: ListenerStream,
     ) -> impl Future<Output = Result<(), std::io::Error>> {
         eprintln!(
             "accept_stream: {:?}, {:?}, {:?}",
             identity, language, stream
         );
-        async { Ok(()) }
+        async move { 
+            loop {
+                let mut buf = [0; 1024];
+                stream.read_buf(&mut ReadBuf::new(&mut buf)).await?;
+            }
+            Ok(()) 
+        }
     }
 
     fn accept_http(
