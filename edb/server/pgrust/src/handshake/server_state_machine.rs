@@ -29,12 +29,6 @@ pub enum ConnectionStateType {
     Ready,
 }
 
-#[derive(Debug, Clone)]
-pub struct ServerCredentials {
-    pub auth_type: AuthType,
-    pub credential_data: CredentialData,
-}
-
 #[derive(Debug)]
 pub enum ConnectionDrive<'a> {
     /// Raw bytes from a client.
