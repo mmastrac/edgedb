@@ -309,13 +309,13 @@ impl FieldAccess<LStringMeta> {
     }
     #[inline(always)]
     pub fn copy_to_buf(buf: &mut BufWriter, value: &str) {
-        let len = value.len();
+        let len = value.len() as u32;
         buf.write(&len.to_be_bytes());
         buf.write(value.as_bytes());
     }
     #[inline(always)]
     pub fn copy_to_buf_ref(buf: &mut BufWriter, value: &str) {
-        let len = value.len();
+        let len = value.len() as u32;
         buf.write(&len.to_be_bytes());
         buf.write(value.as_bytes());
     }

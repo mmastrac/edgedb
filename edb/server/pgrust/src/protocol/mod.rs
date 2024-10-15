@@ -609,4 +609,15 @@ mod tests {
 
         fuzz_test::<meta::FunctionCall>(message);
     }
+
+    #[test]
+    fn test_edgedb_sasl() {
+        use crate::protocol::edgedb::*;
+
+        assert_eq!(builder::AuthenticationRequiredSASLMessage {
+            methods: &["SCRAM-SHA-256"]
+        }.to_vec(), vec![82, 0, 0, 0, 33, 0, 0, 0, 10, 0, 0, 0, 1, 0, 0, 0, 13, 83, 67, 82, 65, 77, 45, 83, 72, 65, 45, 50, 53, 54]);
+
+        
+    }
 }

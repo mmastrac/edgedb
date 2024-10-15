@@ -161,6 +161,7 @@ impl ServerState {
         trace!("SERVER DRIVE: {:?} {:?}", self.state, drive);
         let res = match drive {
             ConnectionDrive::RawMessage(raw) => self.buffer.push_fallible(raw, |message| {
+                trace!("Parsed message: {message:?}");
                 self.state
                     .drive_inner(ConnectionDrive::Message(message), update)
             }),
@@ -192,11 +193,55 @@ impl ServerStateImpl {
             (Initial, ConnectionDrive::Message(message)) => {
                 match_message!(message, Message {
                     (ClientHandshake as handshake) => {
+                        trace!("ClientHandshake: {handshake:?}");
+
+                        // The handshake should generate an event rather than hardcoding the min/max protocol versions.
+
+                        // No extensions are supported
+                        if !handshake.extensions().is_empty() {
+                            update.send(EdgeDBBackendBuilder::ServerHandshake(builder::ServerHandshake { major_ver: 2, minor_ver: 0, extensions: &[] }))?;
+                            return Ok(());
+                        }
+
+                        // We support 1.x and 2.0
                         let major_ver = handshake.major_ver();
                         let minor_ver = handshake.minor_ver();
-                        // TODO: Check version compatibility
-                        *self = AuthInfo(String::new()); // No user info in EdgeDB
-                        update.auth(String::new(), String::new())?;
+                        match (major_ver, minor_ver) {
+                            (..=0, _) => {
+                                update.send(EdgeDBBackendBuilder::ServerHandshake(builder::ServerHandshake { major_ver: 1, minor_ver: 0, extensions: &[] }))?;
+                                return Ok(());
+                            }
+                            (1, 1..) => {
+                                // 1.(1+) never existed
+                                return Err(PROTOCOL_VERSION_ERROR);
+                            }
+                            (2, 1..) | (3.., _) => {
+                                update.send(EdgeDBBackendBuilder::ServerHandshake(builder::ServerHandshake { major_ver: 2, minor_ver: 0, extensions: &[] }))?;
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
+
+                        let mut user = String::new();
+                        let mut database = String::new();
+                        let mut branch = String::new();
+                        for param in handshake.params() {
+                            match param.name().to_str()? {
+                                "user" => user = param.value().to_owned()?,
+                                "database" => database = param.value().to_owned()?,
+                                "branch" => branch = param.value().to_owned()?,
+                                _ => {}
+                            }
+                            update.parameter(param.name().to_str()?, param.value().to_str()?);
+                        }
+                        if user.is_empty() {
+                            return Err(AUTH_ERROR.into());
+                        }
+                        if database.is_empty() {
+                            database = user.clone();
+                        }
+                        *self = AuthInfo(user.clone());
+                        update.auth(user, database)?;
                     },
                     unknown => {
                         log_unknown_message(unknown, "Initial")?;
@@ -271,7 +316,7 @@ impl ServerStateImpl {
                 update.send(EdgeDBBackendBuilder::ReadyForCommand(
                     builder::ReadyForCommand {
                         annotations: &[],
-                        transaction_state: b'I',
+                        transaction_state: 0x49,
                     },
                 ))?;
                 *self = Ready;

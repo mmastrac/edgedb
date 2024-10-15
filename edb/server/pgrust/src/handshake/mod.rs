@@ -10,7 +10,7 @@ pub enum ConnectionSslRequirement {
 }
 
 mod client_state_machine;
-mod edgedb_server;
+pub mod edgedb_server;
 mod server_auth;
 mod server_state_machine;
 

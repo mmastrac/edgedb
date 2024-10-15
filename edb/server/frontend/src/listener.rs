@@ -13,13 +13,6 @@ use crate::{
 use futures::StreamExt;
 use hyper::{upgrade::OnUpgrade, Request, Response, StatusCode};
 use openssl::ssl::{AlpnError, NameType, SniError, Ssl, SslAlert, SslContext, SslMethod};
-use pgrust::{
-    errors::{PgError, PgErrorConnectionException, PgErrorInvalidAuthorizationSpecification},
-    handshake::{
-        server::{ConnectionDrive, ConnectionEvent, ServerState},
-        ConnectionSslRequirement,
-    },
-};
 use scopeguard::defer;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -360,18 +353,102 @@ async fn handle_stream_edgedb_binary(
     identity: ConnectionIdentityBuilder,
     bound_config: impl IsBoundConfig,
 ) -> Result<(), std::io::Error> {
-    socket.read_u8().await?;
-    let mut length_bytes = [0; 4];
-    socket.read_exact(&mut length_bytes).await?;
-    let length = u32::from_be_bytes(length_bytes) - 4;
-    let mut handshake = vec![0; length as usize];
-    socket.read_exact(&mut handshake).await?;
-    println!("Handshake:\n{:?}", hexdump::hexdump(&handshake));
-    _ = socket
-        .write_all(StreamType::EdgeDBBinary.go_away_message())
+    use pgrust::{
+        errors::edgedb::{EdbError},
+        handshake::{
+            edgedb_server::{ConnectionDrive, ConnectionEvent, ServerState},
+        },
+    };
+
+    let mut resolved_identity = None;
+    let mut server_state = ServerState::new();
+    let mut startup_params = HashMap::with_capacity(16);
+    let mut send_buf = Mutex::new(bytes::BytesMut::new());
+    let auth_ready = AtomicBool::new(false);
+    let params_ready = AtomicBool::new(false);
+    let mut update = |update: ConnectionEvent<'_>| {
+        use ConnectionEvent::*;
+        trace!("UPDATE: {update:?}");
+        match update {
+            Auth(user, database) => {
+                identity.set_branch(BranchDB::Branch(database));
+                identity.set_user(user);
+                auth_ready.store(true, Ordering::SeqCst);
+            }
+            Parameter(name, value) => {
+                startup_params.insert(name.to_owned(), value.to_owned());
+            }
+            Params => params_ready.store(true, Ordering::SeqCst),
+            Send(bytes) => {
+                // TODO: Reduce copies and allocations here
+                send_buf.lock().unwrap().extend_from_slice(&bytes.to_vec());
+            }
+            ServerError(e) => {
+                trace!("ERROR {e:?}");
+            }
+            StateChanged(..) => {}
+        }
+        Ok(())
+    };
+
+    while !server_state.is_done() || !send_buf.lock().unwrap().is_empty() {
+        let mut send_buf = std::mem::take(&mut *send_buf.lock().unwrap());
+        if !send_buf.is_empty() {
+            eprintln!("Sending {send_buf:?}");
+            socket.write_all(&send_buf).await?;
+        } else if auth_ready.swap(false, Ordering::SeqCst) {
+            let built = match identity.clone().build() {
+                Ok(built) => built,
+                Err(e) => {
+                    server_state.drive(ConnectionDrive::Fail(EdbError::AuthenticationError, "Missing database or user"), &mut update).unwrap();
+                    return Ok(());
+                }
+            };
+            resolved_identity = Some(built);
+            let auth = bound_config
+                .service()
+                .lookup_auth(
+                    resolved_identity.clone().unwrap(),
+                    AuthTarget::Stream(StreamLanguage::Postgres),
+                )
+                .await?;
+            server_state
+                .drive(
+                    ConnectionDrive::AuthInfo(auth.auth_type(), auth),
+                    &mut update,
+                )
+                .unwrap();
+        } else if params_ready.swap(false, Ordering::SeqCst) {
+            server_state
+                .drive(ConnectionDrive::Ready(Default::default()), &mut update)
+                .unwrap();
+        } else {
+            let mut b = [0; 512];
+            let n = socket.read(&mut b).await?;
+            if n == 0 {
+                // EOF
+                return Ok(());
+            }
+            let res = server_state.drive(ConnectionDrive::RawMessage(&b[..n]), &mut update);
+            if res.is_err() {
+                // TODO?
+                error!("{res:?}");
+                return Ok(());
+            }
+        }
+    }
+
+    let socket = socket.upgrade(StreamPropertiesBuilder {
+        stream_params: Some(startup_params),
+        ..Default::default()
+    });
+    bound_config
+        .service()
+        .accept_stream(resolved_identity.unwrap(), StreamLanguage::EdgeDB, socket)
         .await;
-    _ = socket.shutdown().await;
+
     Ok(())
+
 }
 
 async fn handle_stream_http1x(
@@ -491,11 +568,14 @@ async fn handle_stream_postgres_initial(
     identity: ConnectionIdentityBuilder,
     bound_config: impl IsBoundConfig,
 ) -> Result<(), std::io::Error> {
-    use pgrust::protocol::{
-        match_message, messages::Initial, meta::InitialMessage, StartupMessage, StructBuffer,
+    use pgrust::{
+        errors::{PgError, PgErrorInvalidAuthorizationSpecification},
+        handshake::{
+            server::{ConnectionDrive, ConnectionEvent, ServerState},
+            ConnectionSslRequirement,
+        },
     };
 
-    // We'll handle SSL upgrades here
     let mut resolved_identity = None;
     let mut server_state = ServerState::new(ConnectionSslRequirement::Disable);
     let mut startup_params = HashMap::with_capacity(16);
@@ -529,7 +609,7 @@ async fn handle_stream_postgres_initial(
         Ok(())
     };
 
-    while !server_state.is_done() {
+    while !server_state.is_done() || !send_buf.lock().unwrap().is_empty() {
         let mut send_buf = std::mem::take(&mut *send_buf.lock().unwrap());
         if !send_buf.is_empty() {
             eprintln!("Sending {send_buf:?}");
@@ -1026,7 +1106,7 @@ mod tests {
 
     #[test]
     fn test_raw_postgres() {
-        use pgrust::protocol::builder::{StartupMessage, StartupNameValue};
+        use pgrust::protocol::postgres::builder::{StartupMessage, StartupNameValue};
         run_test_service(TestMode::Tcp, |mut stm| async move {
             let msg = StartupMessage {
                 params: &[

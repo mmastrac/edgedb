@@ -173,8 +173,8 @@ macro_rules! protocol {
     ($( $( #[ $sdoc:meta ] )* struct $name:ident $(: $super:ident)? { $($struct:tt)+ } )+) => {
         $(
             paste::paste!(
+                #[allow(unused_imports)]
                 pub(crate) mod [<__ $name:lower>] {
-                    #[allow(unused_imports)]
                     use super::meta::*;
                     use $crate::protocol::meta::*;
                     use $crate::protocol::gen::*;

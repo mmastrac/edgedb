@@ -21,8 +21,12 @@ pub enum AuthTarget {
 
 #[derive(Clone, Debug)]
 pub enum BranchDB {
+    /// Branch only.
     Branch(String),
+    /// DB only (legacy).
     DB(String),
+    /// Branch and DB (advanced).
+    BranchDB(String, String),
 }
 
 #[derive(thiserror::Error, Debug)]

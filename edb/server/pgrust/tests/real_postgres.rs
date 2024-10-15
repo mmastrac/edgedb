@@ -193,6 +193,7 @@ fn run_postgres(
         let content = std::fs::read_to_string(&pg_hba_path)?;
         let modified_content = content
             .lines()
+            .filter(|line| !line.starts_with("#") && !line.is_empty())
             .map(|line| {
                 if line.trim_start().starts_with("host") {
                     line.replacen("host", "hostssl", 1)
@@ -202,7 +203,7 @@ fn run_postgres(
             })
             .collect::<Vec<String>>()
             .join("\n");
-        eprintln!("pg_hba.conf:\n{modified_content}");
+        eprintln!("pg_hba.conf:\n==========\n{modified_content}\n==========");
         std::fs::write(&pg_hba_path, modified_content)?;
 
         command.arg("-l");

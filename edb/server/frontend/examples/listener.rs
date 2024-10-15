@@ -5,6 +5,7 @@ use edb_frontend::listener::*;
 use edb_frontend::service::*;
 use edb_frontend::stream::*;
 use hyper::Response;
+use pgrust::auth::AuthType;
 use pgrust::auth::CredentialData;
 use pgrust::auth::StoredHash;
 use tokio::io::AsyncReadExt;
@@ -21,10 +22,7 @@ impl BabelfishService for ExampleService {
     ) -> impl Future<Output = Result<CredentialData, std::io::Error>> {
         eprintln!("lookup_auth: {:?}", identity);
         async move {
-            Ok(CredentialData::Md5(StoredHash::generate(
-                b"password",
-                &identity.user,
-            )))
+            Ok(CredentialData::new(AuthType::Trust, "matt".to_owned(), "password".to_owned()))
         }
     }
 
