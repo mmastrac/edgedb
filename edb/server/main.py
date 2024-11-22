@@ -58,6 +58,7 @@ from edb.common import exceptions
 from edb.common import devmode
 from edb.common import signalctl
 from edb.common import debug
+from edb.server._rust_native import init_async
 
 from . import config
 from . import args as srvargs
@@ -424,6 +425,8 @@ async def run_server(
     server = server_mod
 
     logsetup.setup_logging(args.log_level, args.log_to)
+
+    init_async()
 
     logger.info(f"starting EdgeDB server {buildmeta.get_version_line()}")
     if args.multitenant_config_file:

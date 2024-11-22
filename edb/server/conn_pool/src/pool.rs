@@ -12,7 +12,7 @@ use crate::{
 use consume_on_drop::{Consume, ConsumeOnDrop};
 use derive_more::Debug;
 use std::{cell::Cell, rc::Rc, time::Duration};
-use tracing::trace;
+use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub struct PoolConfig {
@@ -210,7 +210,7 @@ impl<C: Connector> Pool<C> {
     pub async fn acquire(self: &Rc<Self>, db: &str) -> ConnResult<PoolHandle<C>, C::Error> {
         self.dirty.set(true);
         let plan = self.algo().plan_acquire(db);
-        trace!("Acquire {db}: {plan:?}");
+        debug!("Acquire {db}: {plan:?}");
         match plan {
             AcquireOp::Create => {
                 tokio::task::spawn_local(self.blocks.task_create_one(&self.connector, db));
@@ -238,7 +238,7 @@ impl<C: Connector> Pool<C> {
             ReleaseType::Normal
         };
         let plan = self.algo().plan_release(db, release_type);
-        trace!("Release: {conn:?} {plan:?}");
+        debug!("Release: {conn:?} {plan:?}");
         match plan {
             ReleaseOp::Release => {}
             ReleaseOp::Discard => {

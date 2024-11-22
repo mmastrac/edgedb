@@ -559,7 +559,8 @@ class TestConnectParams(tb.TestCase):
         {
             'name': 'dsn_combines_env_multi_host',
             'env': {
-                'PGHOST': 'host1:1111,host2:2222',
+                'PGHOST': 'host1,host2',
+                'PGPORT': '1111,2222',
                 'PGUSER': 'foo',
             },
             'dsn': 'postgresql:///db',
@@ -574,7 +575,7 @@ class TestConnectParams(tb.TestCase):
             'env': {
                 'PGUSER': 'foo',
             },
-            'dsn': 'postgresql:///db?host=host1:1111,host2:2222',
+            'dsn': 'postgresql:///db?host=host1,host2&port=1111,2222',
             'result': ([('host1', 1111), ('host2', 2222)], {
                 'database': 'db',
                 'user': 'foo',
@@ -598,11 +599,11 @@ class TestConnectParams(tb.TestCase):
             'dsn': 'postgresql://me:ask@127.0.0.1:888/'
                    'db?param=sss&param=123&host=testhost&user=testuser'
                    '&port=2222&database=testdb&sslmode=require',
-            'result': ([('127.0.0.1', 888)], {
+            'result': ([('testhost', 2222)], {
                 'server_settings': {'param': '123'},
-                'user': 'me',
+                'user': 'testuser',
                 'password': 'ask',
-                'database': 'db',
+                'database': 'testdb',
                 'ssl': True,
                 'sslmode': SSLMode.require})
         },
@@ -613,11 +614,11 @@ class TestConnectParams(tb.TestCase):
                    'db?param=sss&param=123&host=testhost&user=testuser'
                    '&port=2222&database=testdb&sslmode=verify_full'
                    '&aa=bb',
-            'result': ([('127.0.0.1', 888)], {
+            'result': ([('testhost', 2222)], {
                 'server_settings': {'aa': 'bb', 'param': '123'},
-                'user': 'me',
+                'user': 'testuser',
                 'password': 'ask',
-                'database': 'db',
+                'database': 'testdb',
                 'sslmode': SSLMode.verify_full,
                 'ssl': True})
         },
@@ -738,8 +739,8 @@ class TestConnectParams(tb.TestCase):
         },
         {
             'name': 'dsn_only_cloudsql_unix_and_tcp',
-            'dsn': 'postgres:///db?host=127.0.0.1:5432,/cloudsql/'
-                   'project:region:instance-name,localhost:5433&user=spam',
+            'dsn': 'postgres:///db?host=127.0.0.1,/cloudsql/'
+                   'project:region:instance-name,localhost&port=5432,,5433&user=spam',
             'result': (
                 [
                     ('127.0.0.1', 5432),

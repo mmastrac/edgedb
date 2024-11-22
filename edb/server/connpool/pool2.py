@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import edb.server._conn_pool
+from edb.server._rust_native import conn_pool, get_thread_channel
 import asyncio
 import time
 import typing
@@ -25,8 +25,6 @@ import pickle
 
 from . import config
 from .config import logger
-
-guard = edb.server._conn_pool.LoggingGuard()
 
 # Connections must be hashable because we use them to reverse-lookup
 # an internal ID.
@@ -86,7 +84,7 @@ class StatsCollector(typing.Protocol):
 
 
 class Pool(typing.Generic[C]):
-    _pool: edb.server._conn_pool.ConnPool
+    _pool: typing.Optional[conn_pool.ConnPool]
     _next_conn_id: int
     _failed_connects: int
     _failed_disconnects: int
@@ -111,17 +109,15 @@ class Pool(typing.Generic[C]):
                  stats_collector: typing.Optional[StatsCollector]=None,
                  min_idle_time_before_gc: float = config.MIN_IDLE_TIME_BEFORE_GC
         ) -> None:
-        # Re-load the logger if it's been mocked for testing
-        global logger
-        logger = config.logger
-
-        logger.info(f'Creating a connection pool with \
-                    max_capacity={max_capacity}')
+        logger.info('Creating a connection pool with '
+                    f"max_capacity={max_capacity}")
         self._connect = connect
         self._disconnect = disconnect
-        self._pool = edb.server._conn_pool.ConnPool(max_capacity,
-                                                    min_idle_time_before_gc,
-                                                    config.STATS_COLLECT_INTERVAL)
+        self._pool = conn_pool.ConnPool(get_thread_channel(),
+                                        lambda msg: self._process_message(msg),
+                                        max_capacity,
+                                        min_idle_time_before_gc,
+                                        config.STATS_COLLECT_INTERVAL)
         self._max_capacity = max_capacity
         self._cur_capacity = 0
         self._next_conn_id = 0
@@ -174,6 +170,8 @@ class Pool(typing.Generic[C]):
         logger.info("Python-side connection pool booted")
         reader = asyncio.StreamReader(loop=loop)
         reader_protocol = asyncio.StreamReaderProtocol(reader)
+        if not self._pool:
+            return
         fd = os.fdopen(self._pool._fd, 'rb')
         transport, _ = await loop.connect_read_pipe(lambda: reader_protocol, fd)
         try:
@@ -195,9 +193,10 @@ class Pool(typing.Generic[C]):
     # latency a small degree. We'll still need to eventually pick up a self-pipe
     # read but we increment a counter to skip at that point.
     def _try_read(self) -> None:
-        while msg := self._pool._try_read():
-            self._skip_reads += 1
-            self._process_message(msg)
+        if self._pool:
+            while msg := self._pool._try_read():
+                self._skip_reads += 1
+                self._process_message(msg)
 
     def _process_message(self, msg: typing.Any) -> None:
         # If we're closing, don't dispatch any operations
@@ -287,6 +286,8 @@ class Pool(typing.Generic[C]):
     async def acquire(self, dbname: str) -> C:
         """Acquire a connection from the database. This connection must be
         released."""
+        if not self._pool:
+            raise asyncio.CancelledError()
         if not self._task:
             raise asyncio.CancelledError()
         for i in range(config.CONNECT_FAILURE_RETRIES + 1):
@@ -319,6 +320,9 @@ class Pool(typing.Generic[C]):
         raise AssertionError("Unreachable end of loop")
 
     def release(self, dbname: str, conn: C, discard: bool = False) -> None:
+        if not self._pool:
+            raise asyncio.CancelledError()
+
         """Releases a connection back into the pool, discarding or returning it
         in the background."""
         id = self._conns_held.pop(conn)
@@ -329,6 +333,8 @@ class Pool(typing.Generic[C]):
         self._try_read()
 
     async def prune_inactive_connections(self, dbname: str) -> None:
+        if not self._pool:
+            raise asyncio.CancelledError()
         if not self._task:
             raise asyncio.CancelledError()
         id = self._next_conn_id
@@ -361,11 +367,11 @@ class Pool(typing.Generic[C]):
                 v = stats['value']
                 block_snapshot = BlockSnapshot(
                     dbname=dbname,
-                    nconns=v[edb.server._conn_pool.METRIC_ACTIVE],
-                    nwaiters_avg=v[edb.server._conn_pool.METRIC_WAITING],
-                    npending=v[edb.server._conn_pool.METRIC_CONNECTING] +
-                        v[edb.server._conn_pool.METRIC_RECONNECTING],
-                    nwaiters=v[edb.server._conn_pool.METRIC_WAITING],
+                    nconns=v[conn_pool.METRIC_ACTIVE],
+                    nwaiters_avg=v[conn_pool.METRIC_WAITING],
+                    npending=v[conn_pool.METRIC_CONNECTING] +
+                        v[conn_pool.METRIC_RECONNECTING],
+                    nwaiters=v[conn_pool.METRIC_WAITING],
                     quota=stats['target']
                 )
                 blocks.append(block_snapshot)

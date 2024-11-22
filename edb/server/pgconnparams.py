@@ -24,8 +24,7 @@ import pathlib
 import platform
 import ssl as ssl_module
 import warnings
-import edb.server._pg_rust
-
+from edb.server._rust_native.module._pg_rust import parse_dsn as parse_dsn_native
 
 class SSLMode(enum.IntEnum):
     disable = 0
@@ -101,9 +100,9 @@ def parse_dsn(
     ConnectionParameters,
 ]:
     try:
-        parsed, ssl_paths = edb.server._pg_rust.parse_dsn(getpass.getuser(),
-                                               str(get_pg_home_directory()),
-                                               dsn)
+        parsed = parse_dsn_native(getpass.getuser(),
+                                             str(get_pg_home_directory()),
+                                             dsn)
     except Exception as e:
         raise ValueError(f"{e.args[0]}") from e
 
@@ -120,18 +119,18 @@ def parse_dsn(
         if sslmode < SSLMode.require:
             ssl.verify_mode = ssl_module.CERT_NONE
         else:
-            if ssl_paths['rootcert']:
-                ssl.load_verify_locations(ssl_paths['rootcert'])
+            if ssl_config['rootcert']:
+                ssl.load_verify_locations(ssl_config['rootcert'])
                 ssl.verify_mode = ssl_module.CERT_REQUIRED
             else:
                 if sslmode == SSLMode.require:
                     ssl.verify_mode = ssl_module.CERT_NONE
-            if ssl_paths['crl']:
-                ssl.load_verify_locations(ssl_paths['crl'])
+            if ssl_config['crl']:
+                ssl.load_verify_locations(ssl_config['crl'])
                 ssl.verify_flags |= ssl_module.VERIFY_CRL_CHECK_CHAIN
-        if ssl_paths['key'] and ssl_paths['cert']:
-            ssl.load_cert_chain(ssl_paths['cert'],
-                                ssl_paths['key'],
+        if ssl_config['key'] and ssl_config['cert']:
+            ssl.load_cert_chain(ssl_config['cert'],
+                                ssl_config['key'],
                                 ssl_config['password'] or '')
         if ssl_config['max_protocol_version']:
             ssl.maximum_version = _parse_tls_version(
@@ -146,21 +145,21 @@ def parse_dsn(
 
     # Extract hosts from the dict
     addrs: List[Tuple[str, int]] = []
-    for host in parsed['hosts']:
+    for host, port in parsed['hosts']:
         if 'Hostname' in host:
-            host, port = host['Hostname']
+            host = host['Hostname']
             addrs.append((host, port))
         elif 'IP' in host:
-            ip, port, scope = host['IP']
+            ip, scope = host['IP']
             # Reconstruct the scope ID
             if scope:
                 ip = f'{ip}%{scope}'
             addrs.append((ip, port))
         elif 'Path' in host:
-            path, port = host['Path']
+            path = host['Path']
             addrs.append((path, port))
         elif 'Abstract' in host:
-            path, port = host['Abstract']
+            path = host['Abstract']
             addrs.append((path, port))
 
     # Database/user/password/connect_timeout
